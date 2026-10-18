@@ -20,6 +20,12 @@ pnpm test
 
 No WhatsApp connection, message sending, or business behavior is implemented in this bootstrap. See `docs/architecture/README.md` and module READMEs.
 
+## Arquivos privados e versionamento
+
+O `.gitignore` exclui configurações locais (`.env`, `.init`, `.ini`, `host-config.json`), tokens e chaves privadas, bancos SQLite com WAL/SHM/journals, dados em `.local-data/`, mídias, logs e backups. Mantenha apenas exemplos sanitizados como `.env.example`; nunca preencha esses exemplos com credenciais reais. Migrações SQL, código, documentação e o lockfile devem continuar versionáveis.
+
+Use os diretórios privados do perfil macOS para operação e permissões 0700 em diretórios e 0600 em arquivos de credenciais. Ao configurar um caminho personalizado dentro do checkout, mantenha os arquivos privados nos diretórios ignorados. O `.gitignore` não protege acesso local nem remove arquivos já rastreados ou segredos do histórico; se houver exposição anterior, é necessário revisar o rastreamento/histórico e revogar ou rotacionar as credenciais afetadas.
+
 ## Homologação e execução contínua no macOS
 
 O WAI Bridge é um serviço **local-first**: a Local API fica vinculada a `127.0.0.1`, e dados/token ficam no perfil do usuário do macOS. Não é um serviço para publicar em servidor público ou expor à internet. O LaunchAgent mantém a API iniciada para o usuário conectado e tenta reiniciá-la se encerrar. Hoje isso serve para homologar componentes locais; o projeto ainda não está aprovado para produção com WhatsApp real. A captura pela interface, o envio real, a ingestão de mídia e a integração completa dos componentes têm lacunas descritas em `docs/testing/final-audit.md` e `.ai/context/current-state.md`.

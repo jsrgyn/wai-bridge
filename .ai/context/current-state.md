@@ -1,5 +1,7 @@
 # Estado atual verificado
 
+Atualizado em 2026-10-18: `.gitignore` revisado para proteger configurações `.env`/`.init`/`.ini`, `.local-data/`, SQLite e arquivos auxiliares, backups, logs, credenciais e chaves privadas. Padrões genéricos por substring para token/credential/secret foram substituídos por nomes/extensões de arquivos privados para preservar código legítimo. README documenta exemplos sanitizados, permissões privadas e limites do ignore para arquivos já rastreados/histórico. Validação executada com Python e matcher de ignore do ripgrep em diretório temporário: 33 caminhos privados ignorados e 11 caminhos de código/exemplos preservados. Inventário local por nomes com ripgrep encontrou apenas `.env.example` entre os padrões sensíveis consultados. Nenhum comando Git foi executado; índice e histórico não foram auditados nem alterados. Nenhum teste de runtime/build foi executado nesta tarefa de configuração/documentação.
+
 Atualizado em 2026-10-17: README ganhou procedimento de homologação local e execução persistente da Local API via LaunchAgent macOS, com comandos de instalação, diagnóstico, atualização e recuperação. A documentação ressalta que o LaunchAgent requer sessão do usuário e que o sistema permanece não pronto para produção/WhatsApp real conforme auditoria Prompt 16. Alteração documental; nenhuma validação de serviço foi executada nesta tarefa.
 
 Atualizado em 2026-10-17.
