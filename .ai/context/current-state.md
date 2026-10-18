@@ -1,5 +1,7 @@
 # Estado atual verificado
 
+Atualizado em 2026-10-17: README ganhou procedimento de homologação local e execução persistente da Local API via LaunchAgent macOS, com comandos de instalação, diagnóstico, atualização e recuperação. A documentação ressalta que o LaunchAgent requer sessão do usuário e que o sistema permanece não pronto para produção/WhatsApp real conforme auditoria Prompt 16. Alteração documental; nenhuma validação de serviço foi executada nesta tarefa.
+
 Atualizado em 2026-10-17.
 
 - Prompt 18: revisão ampla estática documentada em `.ai/reports/review-workspace-2026-10-17.md`, parecer `CHANGES_REQUIRED`. Suites unitárias, integração, extensão, mac-agent e MCP, build, typecheck e lint passaram; foram registrados dois achados HIGH em processamento/ACK de IA/eventos e um achado MEDIUM de recovery do outbox. Nenhum código foi alterado. Git indisponível nesta pasta; não foi possível inspecionar diff/histórico.
