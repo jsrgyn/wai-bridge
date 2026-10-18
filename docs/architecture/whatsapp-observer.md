@@ -13,7 +13,7 @@ Monitoring is manually enabled in the popup. The content script attaches narrow 
 | `PENDING` | A message node was added but text is unavailable. |
 | `FAILED` | Extraction failed after a relevant node was added. |
 
-The shared Zod contract carries a UUID observation ID, UTC timestamp, optional visible labels, `INBOUND`/`OUTBOUND`/`UNKNOWN` direction, optional text, content availability, and media type hints. The service worker stores observations in a queue before asking the local agent to submit them. The agent authenticates to the loopback API, which stores the observation and event in one SQLite transaction. The event contains only the observation ID and classification. `GET /api/observations/{id}` requires the local bearer token. Capture does not change `wa_ai_message_state`; explicit consumer ACK remains the only AI read transition.
+The shared Zod contract carries a UUID observation ID, UTC timestamp, optional visible labels, `INBOUND`/`OUTBOUND`/`UNKNOWN` direction, optional text, content availability, and media type hints. The service worker stores observations in a queue before asking the local agent to submit them. The agent authenticates to the loopback API, which stores staging, normalization and events in one SQLite transaction. ADR 0008 gives each observation its own internal conversation with UNKNOWN identity, without merging labels. Known-direction messages become queryable through MCP, with UNREAD state and provenance. Unknown direction remains staged; activity never manufactures message content. Events carry IDs/classification, not text. `GET /api/observations/{id}` requires the local bearer token. Only explicit consumer ACK marks READ.
 
 ## Limits
 

@@ -31,3 +31,62 @@ Este modelo é inicial, não avaliação formal. Antes de disponibilizar envio o
 ## Controles de mídia locais (Prompt 11)
 
 `packages/media` recebe bytes de uma fonte local autorizada, limita tamanho, identifica o MIME por assinatura, bloqueia assinaturas executáveis conhecidas e não interpreta arquivos como código. Chaves relativas são geradas a partir de tipo/data/SHA-256 e validadas antes de resolver caminhos; gravação usa arquivo temporário exclusivo, permissões privadas e criação sem sobrescrever. Leitura usa `O_NOFOLLOW`, tamanho e SHA-256; caminhos simbólicos suspeitos são rejeitados. Uma raiz externa exige marcador criado durante provisionamento e não é recriada automaticamente após desconexão. O limite da API continua pendente: o pacote não publica rota de bytes e a API ainda precisa decidir autorização por recurso antes de expor ingestão ou download. `ffprobe` é opcional e opera com timeout; manutenção de parser, criptografia em repouso e política operacional de backup/reconciliação permanecem itens de revisão.
+
+
+## Canal experimental de envio pela extensão (ADR 0010)
+
+Envio real passa por três declarações: autorização literal do pedido MCP, opt-in
+específico no inicializador MCP e permissão no popup. A referência PARTIAL exige
+contexto atual confirmado por conta/telefone ou UUID local de grupo; nomes não
+resolvem destinatários. O token da API não vai à extensão. Progresso é vinculado
+à instância, contexto, aba ativa e lease/token; token não aparece no status público
+ou auditoria. API continua com principal Bearer full-access, sem scopes distintos.
+
+SQLite confirma SENDING antes do clique. Perda desse ACK impede efeito, e incerteza
+pós-SENDING nunca é reenfileirada automaticamente. Idempotência de criação/ACK,
+lease da interface e kind separado evitam retries do dispatcher legado. Mudança
+visível de contexto ou rascunho impede envio. Recuperação fecha leases vencidas;
+comandos pré-execução expirados falham. O MCP consulta resultado persistido e não
+interpreta REQUESTED como enviado.
+
+Limites: referência confirmada e DOM visível não dão prova criptográfica do
+remetente/destinatário, e marcadores visuais podem mudar. Um erro de cadastro local
+ou alteração da UI sem sinal observável permanece possível. SENT significa evidência
+visível suficiente, não validação de protocolo oficial. Provas automatizadas são
+sintéticas; operação real do novo executor não foi validada em conta de usuário.
+
+## Busca de destinatário por telefone (ADR 0012)
+
+A busca da UI não é prova de identidade. Com locateByPhone explícito, só um comando
+persistido de contato direto com número cadastrado pode ser reivindicado por outro
+contexto aberto da mesma conta local. Conta local é uma declaração do navegador,
+não prova criptográfica da conta WhatsApp: namespaces incorretos não devem ser
+reutilizados. A extensão compara o telefone no perfil visível, não o texto da busca.
+Revalida antes do efeito e mantém o contexto resolvido separado da lease original.
+Rascunhos, ambiguidade, troca de perfil/conta e interferência interrompem. Não há
+protocolos privados, novas permissões, leitura de sessão ou envio real em testes.
+
+### Resolução por nome e prova do destinatário (ADR 0014)
+
+Nome recebido pelo MCP é dado de busca, não instrução. Resolução ocorre na API e
+na conta local autorizada; exige telefone único. O nome não autentica o perfil:
+extensão precisa comparar telefone completo visível. Número informado não cria
+contato verificado antecipadamente. Progresso autenticado pela lease apresenta
+identidade/label; a API confere conta e telefone e persiste antes de SENDING.
+Replay mantém intenção original mesmo após mudanças de cadastro. Ocultar a aba
+não permite claim/efeito de envio; espera supervisionada pode manter o rascunho.
+Campos de edição visíveis não são descartados para fechar o perfil. Nenhum aumento
+de permissões, leitura de credenciais ou uso de protocolos internos foi adicionado.
+
+
+### Entrega responsiva (ADR 0015)
+
+Preflight ready=false não adquire lease. Ativação de aba existente exige opt-in,
+pedido pendente autorizado e candidato único; identidade/visibilidade são relidas
+antes de claim. Não cria abas, concede permissões, envia ocultamente ou contorna
+controle do usuário. Supervisão activeCommand valida o mesmo owner/token/contexto;
+cancel local só aceita mensagem da própria extensão para o comando ativo. ACK curto
+não significa SENT. ACK perdido preserva claim para recuperação e nunca redelivery.
+Build divergente impede uso de content script antigo. Diagnóstico expõe códigos e
+contagens, não nomes/telefones/textos/tokens. Native capture concurrency é limitada
+para não bloquear o controle de envio; frames continuam atômicos e validados.

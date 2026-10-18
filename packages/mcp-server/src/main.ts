@@ -9,6 +9,6 @@ const api = new LocalApiClient({
   token,
   ...(process.env.WAI_MCP_API_TIMEOUT_MS ? { timeoutMs: Number(process.env.WAI_MCP_API_TIMEOUT_MS) } : {}),
 });
-const handle = serveStdio(() => createMcpServer({ api, allowWrites: process.env.WAI_MCP_ALLOW_WRITES === 'true' }));
+const handle = serveStdio(() => createMcpServer({ api, allowWrites: process.env.WAI_MCP_ALLOW_WRITES === 'true', allowExtensionSends: process.env.WAI_MCP_ALLOW_EXTENSION_SENDS === 'true' }));
 process.once('SIGINT', () => { void handle.close(); });
 process.once('SIGTERM', () => { void handle.close(); });

@@ -17,7 +17,7 @@ export interface HostOptions {
 
 export async function runNativeHost(options: HostOptions): Promise<void> {
   const expectedOrigin = `chrome-extension://${options.config.extensionId}`;
-  if (options.callerOrigin !== expectedOrigin) {
+  if (options.callerOrigin !== expectedOrigin && options.callerOrigin !== `${expectedOrigin}/`) {
     options.stderr.write('Rejected Native Messaging caller origin.\n');
     throw new Error('UNAUTHORIZED_EXTENSION_ORIGIN');
   }
@@ -25,20 +25,32 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
   const hostInstanceId = randomUUID();
   let extensionInstanceId: string | undefined;
   let closed = false;
+  const captureJobs = new Set<Promise<void>>();
   const now = options.now ?? (() => new Date());
-  const write = (message: Parameters<typeof writeNativeMessage>[1]) => writeNativeMessage(options.output, message);
+  const write = (message: Parameters<typeof writeNativeMessage>[1]) =>
+    writeNativeMessage(options.output, message);
   const reportState = async (status: 'CONNECTED' | 'DISCONNECTED') => {
     if (!extensionInstanceId) return;
     try {
-      await options.api.recordExtensionState({ extensionInstanceId, status, lastSeenAt: now().toISOString() });
+      await options.api.recordExtensionState({
+        extensionInstanceId,
+        status,
+        lastSeenAt: now().toISOString(),
+      });
     } catch {
       options.stderr.write('Local API state update failed.\n');
     }
   };
   const timer = setInterval(() => {
     if (closed || !extensionInstanceId) return;
-    void write({ version: 1, id: randomUUID(), type: 'HOST_STATE', connected: true, hostInstanceId, at: now().toISOString() })
-      .catch(() => options.stderr.write('Native host heartbeat write failed.\n'));
+    void write({
+      version: 1,
+      id: randomUUID(),
+      type: 'HOST_STATE',
+      connected: true,
+      hostInstanceId,
+      at: now().toISOString(),
+    }).catch(() => options.stderr.write('Native host heartbeat write failed.\n'));
   }, options.heartbeatMs ?? 25_000);
   timer.unref();
 
@@ -47,35 +59,128 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
       if (request.type === 'HELLO') {
         extensionInstanceId = request.extensionInstanceId;
         await reportState('CONNECTED');
-        await write({ version: 1, id: request.id, type: 'HOST_STATE', connected: true, hostInstanceId, at: now().toISOString() });
+        await write({
+          version: 1,
+          id: request.id,
+          type: 'HOST_STATE',
+          connected: true,
+          hostInstanceId,
+          at: now().toISOString(),
+        });
       } else if (request.type === 'HEARTBEAT') {
         if (extensionInstanceId && extensionInstanceId !== request.extensionInstanceId) {
-          await write({ version: 1, id: request.id, type: 'ERROR', code: 'INVALID_REQUEST', at: now().toISOString() });
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
           continue;
         }
         extensionInstanceId = request.extensionInstanceId;
         await reportState('CONNECTED');
-        await write({ version: 1, id: request.id, type: 'HOST_STATE', connected: true, hostInstanceId, at: now().toISOString() });
-      } else if (request.type === 'STATUS_REQUEST') {
-        const available = await options.api.health();
-        await write({ version: 1, id: request.id, type: 'STATUS_RESULT', api: available ? 'AVAILABLE' : 'UNAVAILABLE', at: now().toISOString() });
-      } else if (request.type === 'CAPTURE_OBSERVATION') {
-        if (!extensionInstanceId || request.extensionInstanceId !== extensionInstanceId) {
-          await write({ version: 1, id: request.id, type: 'ERROR', code: 'INVALID_REQUEST', at: now().toISOString() });
+        await write({
+          version: 1,
+          id: request.id,
+          type: 'HOST_STATE',
+          connected: true,
+          hostInstanceId,
+          at: now().toISOString(),
+        });
+      } else if (request.type === 'SEND_POLL' || request.type === 'SEND_PROGRESS') {
+        if (!extensionInstanceId || request.input.extensionInstanceId !== extensionInstanceId) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
           continue;
         }
         try {
-          const result = await options.api.recordObservation({ extensionInstanceId, observation: request.observation });
-          await write({ version: 1, id: request.id, type: 'CAPTURE_RESULT', ...result, at: now().toISOString() });
+          if (request.type === 'SEND_POLL')
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'SEND_POLL_RESULT',
+              result: await options.api.sendPoll(request.input),
+            });
+          else
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'SEND_PROGRESS_RESULT',
+              result: await options.api.sendProgress(request.input),
+            });
         } catch {
-          options.stderr.write('Capture persistence failed.\n');
-          await write({ version: 1, id: request.id, type: 'ERROR', code: 'API_UNAVAILABLE', at: now().toISOString() });
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'API_UNAVAILABLE',
+            at: now().toISOString(),
+          });
         }
+      } else if (request.type === 'STATUS_REQUEST') {
+        const available = await options.api.health();
+        await write({
+          version: 1,
+          id: request.id,
+          type: 'STATUS_RESULT',
+          api: available ? 'AVAILABLE' : 'UNAVAILABLE',
+          at: now().toISOString(),
+        });
+      } else if (request.type === 'CAPTURE_OBSERVATION') {
+        if (!extensionInstanceId || request.extensionInstanceId !== extensionInstanceId) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
+          continue;
+        }
+        // One slow observation must not block send progress/cancellation/status frames.
+        // Capture concurrency is bounded; frames are still written atomically.
+        if (captureJobs.size >= 2) await Promise.race(captureJobs);
+        const captureInstanceId = extensionInstanceId;
+        const job = (async () => {
+          try {
+            const result = await options.api.recordObservation({
+              extensionInstanceId: captureInstanceId,
+              observation: request.observation,
+            });
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'CAPTURE_RESULT',
+              ...result,
+              at: now().toISOString(),
+            });
+          } catch {
+            options.stderr.write('Capture persistence failed.\n');
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'ERROR',
+              code: 'API_UNAVAILABLE',
+              at: now().toISOString(),
+            });
+          }
+        })().catch(() => {
+          options.stderr.write('Capture response write failed.\n');
+        });
+        captureJobs.add(job);
+        void job.finally(() => captureJobs.delete(job));
       }
     }
   } finally {
     closed = true;
     clearInterval(timer);
+    await Promise.all(captureJobs);
     await reportState('DISCONNECTED');
   }
 }

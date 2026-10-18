@@ -5,7 +5,7 @@ import { InMemoryTransport as ServerMemoryTransport } from '@modelcontextprotoco
 import { Client } from '@modelcontextprotocol/client';
 
 const TOKEN = 'test-token-at-least-thirty-two-characters';
-const names = ['whatsapp_status','whatsapp_search_contacts','whatsapp_list_conversations','whatsapp_list_groups','whatsapp_get_conversation','whatsapp_get_messages','whatsapp_get_unread','whatsapp_get_recent','whatsapp_get_media','whatsapp_get_pending_tasks','whatsapp_prepare_message','whatsapp_request_send','whatsapp_get_outbox_status','whatsapp_cancel_send'];
+const names = ['whatsapp_status','whatsapp_search_contacts','whatsapp_list_conversations','whatsapp_list_groups','whatsapp_get_conversation','whatsapp_get_messages','whatsapp_get_dialogue','whatsapp_get_unread','whatsapp_get_recent','whatsapp_get_media','whatsapp_get_pending_tasks','whatsapp_prepare_message','whatsapp_request_send','whatsapp_get_outbox_status','whatsapp_cancel_send','whatsapp_send_message','whatsapp_send_to_number','whatsapp_send_to_contact','whatsapp_cancel_extension_send'];
 const closeFns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of closeFns.splice(0)) await close(); vi.restoreAllMocks(); });
 
@@ -77,6 +77,24 @@ describe('MCP server', () => {
     await expect(malformed.page('/api/conversations')).rejects.toThrow(/contract/);
     const slow = new LocalApiClient({ baseUrl: 'http://127.0.0.1:47831', token: TOKEN, timeoutMs: 100, fetchImpl: ((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))))) as typeof fetch });
     await expect(slow.request('/api/status')).rejects.toThrow(/timed out/);
+  });
+
+  it('gates extension sends separately and forwards explicit intent without claiming delivery', async () => {
+    const fetchImpl=vi.fn(async (input: RequestInfo|URL,init?:RequestInit)=>{
+      expect(new URL(String(input)).pathname).toBe('/api/extension/outbox');
+      expect(new Headers(init?.headers).get('idempotency-key')).toBe('synthetic-extension-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({mode:'AUTO',explicitAuthorization:true,locateByPhone:true});
+      return Response.json({id:'synthetic-command',status:'REQUESTED'},{status:202});
+    }) as typeof fetch;
+    const api=new LocalApiClient({baseUrl:'http://127.0.0.1:47831',token:TOKEN,fetchImpl});
+    const args={conversationId:'11111111-1111-4111-8111-111111111111',text:'Synthetic reply',mode:'AUTO',explicitAuthorization:true,locateByPhone:true,idempotencyKey:'synthetic-extension-key'};
+    const disabled=await connect(createMcpServer({api,allowWrites:true}));
+    expect((await disabled.callTool({name:'whatsapp_send_message',arguments:args})).isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const client=await connect(createMcpServer({api,allowExtensionSends:true}));
+    expect((await client.callTool({name:'whatsapp_send_message',arguments:{...args,explicitAuthorization:false}})).isError).toBe(true);
+    const response=await client.callTool({name:'whatsapp_send_message',arguments:args});
+    expect(response.isError).not.toBe(true);expect(JSON.stringify(response.content)).toContain('REQUESTED');expect(JSON.stringify(response.content)).not.toContain('SENT');
   });
 
   it('blocks writes unless enabled, preserves idempotency and never reports a send as executed', async () => {

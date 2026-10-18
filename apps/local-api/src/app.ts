@@ -1,3 +1,4 @@
+import { ExtensionPhoneSendRequestSchema, ExtensionRecipientSendRequestSchema, ExtensionSendRequestSchema, ExtensionSendPollSchema, ExtensionSendProgressSchema } from '@wai-bridge/shared';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Database from 'better-sqlite3';
@@ -174,6 +175,21 @@ export function buildApp(options: AppOptions): FastifyInstance {
         parse(IdempotencyKeySchema, request.headers['idempotency-key']);
         return reply.send(controller.failForConsumer(parse(ConsumerFailBodySchema, request.body)));
       });
+      api.post('/extension/outbox', async (request, reply) => {
+        const key = parse(IdempotencyKeySchema, request.headers['idempotency-key']);
+        return reply.code(202).send(service.createExtensionSend(parse(ExtensionSendRequestSchema,request.body),key));
+      });
+      api.post('/extension/outbox/phone', async (request,reply) => {
+        const key=parse(IdempotencyKeySchema,request.headers['idempotency-key']);
+        return reply.code(202).send(service.createExtensionPhoneSend(parse(ExtensionPhoneSendRequestSchema,request.body),key));
+      });
+      api.post('/extension/outbox/recipient', async (request,reply) => {
+        const key=parse(IdempotencyKeySchema,request.headers['idempotency-key']);
+        return reply.code(202).send(service.createExtensionRecipientSend(parse(ExtensionRecipientSendRequestSchema,request.body),key));
+      });
+      api.post('/extension/outbox/poll', async request => service.pollExtensionSend(parse(ExtensionSendPollSchema,request.body)));
+      api.post('/extension/outbox/progress', async request => service.progressExtensionSend(parse(ExtensionSendProgressSchema,request.body)));
+      api.post('/extension/outbox/:id/cancel', async request => service.cancelExtensionSend(parse(IdParamsSchema,request.params).id));
       api.post('/outbox', async (request, reply) => {
         const key = parse(IdempotencyKeySchema, request.headers['idempotency-key']);
         return reply

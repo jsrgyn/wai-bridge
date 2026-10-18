@@ -22,6 +22,10 @@ export const migrations: readonly Migration[] = [
   loadMigration(4, 'media-storage', '004-media-storage.sql'),
   loadMigration(5, 'ai-consumer-leases', '005-ai-consumer-leases.sql'),
   loadMigration(6, 'outbox-engine', '006-outbox-engine.sql'),
+  loadMigration(7, 'capture-normalization', '007-capture-normalization.sql'),
+  loadMigration(8, 'conversation-identities', '008-conversation-identities.sql'),
+  loadMigration(9, 'automatic-ui-context', '009-automatic-ui-context.sql'),
+  loadMigration(10, 'contact-phone', '010-contact-phone.sql'),
 ];
 
 export function applyMigrations(

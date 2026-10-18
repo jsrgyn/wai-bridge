@@ -11,7 +11,31 @@
       <h1>WAI Bridge</h1>
       <p id="connection" role="status">Local agent: unconfigured</p>
       <p id="monitor-state">Monitoring: off</p>
+      <p id="capture-context" role="status"></p>
       <button id="toggle-monitor" type="button">Start monitoring</button>
+      <label><input id="allow-extension-sends" type="checkbox" /> Permitir comandos de envio do MCP nesta extensão</label>
+      <p>Contatos podem ser localizados pelo número cadastrado, com conferência do perfil. AUTO aguarda 5 segundos canceláveis; SUPERVISED aguarda seu clique em Enviar.</p>
+      <section aria-labelledby="identity-heading">
+        <h2 id="identity-heading">Identificação automática</h2>
+        <p>Com o monitor ON, mensagens novas da conversa aberta são vinculadas automaticamente, incluindo envios sincronizados do celular. Conversas não renderizadas não têm cobertura completa. Referências visuais podem mudar após recarregar a página.</p>
+        <details><summary>Identificação manual avançada (opcional)</summary>
+        <p>Abra os dados do contato ou do grupo no WhatsApp. Confirme a conta e a conversa atuais. O vínculo será descartado ao navegar.</p>
+        <label>Conta local <select id="identity-account"></select></label>
+        <label>Nome de uma nova conta <input id="identity-account-name" maxlength="80" /></label>
+        <details><summary>Recuperar conta já cadastrada</summary><label>Código local da conta existente <input id="identity-account-restore" placeholder="Opcional: UUID salvo anteriormente" /></label></details>
+        <button id="identity-add-account" type="button">Adicionar conta local</button>
+        <button id="identity-preview" type="button">Conferir conversa aberta</button>
+        <div id="identity-group-fields" hidden>
+          <label>Grupo local <select id="identity-group"></select></label>
+          <label>Nome para novo grupo <input id="identity-group-name" maxlength="256" /></label>
+          <details><summary>Recuperar grupo já cadastrado</summary><label>Código local do grupo existente <input id="identity-group-restore" placeholder="Opcional: UUID salvo anteriormente" /></label></details>
+          <p>Selecione conscientemente o grupo correto. Nomes iguais não unem cadastros.</p>
+        </div>
+        <label><input id="identity-confirm" type="checkbox" /> Confirmo que a conta e o contato/grupo selecionados correspondem à conversa aberta.</label>
+        <button id="identity-bind" type="button" disabled>Vincular conversa atual</button>
+        <button id="identity-clear" type="button">Desvincular conversa atual</button>
+        <p id="identity-status" role="status">Nenhum vínculo confirmado nesta janela.</p>
+      </details></section>
       <section aria-labelledby="activity-heading">
         <h2 id="activity-heading">Recent activity</h2>
         <ul id="activities"></ul>

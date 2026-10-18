@@ -7,3 +7,6 @@ ul { margin: 0; padding-left: 18px; }
 li { margin: 4px 0; overflow-wrap: anywhere; }
 button { width: 100%; padding: 8px; margin: 8px 0; }
 a { display: inline-block; margin-top: 12px; }
+body { max-width: 380px; }
+label { display: block; margin: 8px 0; }
+select, input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; padding: 6px; }

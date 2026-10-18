@@ -1,11 +1,14 @@
-import { ExtensionStateSchema, type ExtensionState } from '../contracts.js';
+import { ExtensionSendBridge } from './send-bridge.js';
+import { ExtensionStateSchema, IdentityControlSchema, type ExtensionState } from '../contracts.js';
 import { z } from 'zod';
 import { parseCaptureObservation, parsePopupCommand } from '../messaging/protocol.js';
 import { NATIVE_HOST_NAME, NativeResponseSchema } from '../platform/native-messaging-adapter.js';
 import { EventPublisher } from './event-publisher.js';
+import { activeMonitorStatus } from './monitor-status.js';
 
 const extensionInstanceIdKey = 'waiBridgeExtensionInstanceId';
 const publisher = new EventPublisher(chrome.storage.local);
+const sendBridge=new ExtensionSendBridge(getExtensionInstanceId,chrome.tabs,chrome.storage.local,chrome.windows);
 let nativePort: chrome.runtime.Port | undefined;
 let reconnectDelay = 1_000;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -50,8 +53,9 @@ async function applyMonitoring(enabled: boolean): Promise<ExtensionState> {
   }
   const current = await getState();
   const updated = { ...current, monitoring: enabled };
-  await saveState(updated);
-  return updated;
+  await chrome.storage.local.set({waiMonitoringIntent:enabled});
+  await saveState({...updated, errors: []});
+  return activeMonitorStatus({...updated,errors:[]}, chrome.tabs);
 }
 
 async function updateConnection(connection: ExtensionState['connection']): Promise<void> {
@@ -64,6 +68,7 @@ async function connectNative(): Promise<void> {
   try {
     const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     nativePort = port;
+    sendBridge.connect(port);
     const extensionInstanceId = await getExtensionInstanceId();
     port.onMessage.addListener((raw: unknown) => {
       const parsed = NativeResponseSchema.safeParse(raw);
@@ -71,10 +76,11 @@ async function connectNative(): Promise<void> {
         void updateConnection('DISCONNECTED');
         return;
       }
+      if(sendBridge.receive(parsed.data))return;
       if (parsed.data.type === 'HOST_STATE') {
         reconnectDelay = 1_000;
         void updateConnection(parsed.data.connected ? 'CONNECTED' : 'DISCONNECTED');
-        if (parsed.data.connected) void publisher.connect(port, extensionInstanceId);
+        if (parsed.data.connected) {void publisher.connect(port, extensionInstanceId);void sendBridge.poll();}
       }
       if (parsed.data.type === 'CAPTURE_RESULT') void publisher.acknowledge(parsed.data.observationId, parsed.data.eventId);
       if (parsed.data.type === 'ERROR') {
@@ -85,6 +91,7 @@ async function connectNative(): Promise<void> {
     port.onDisconnect.addListener(() => {
       nativePort = undefined;
       publisher.disconnect();
+      sendBridge.disconnect();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
       void updateConnection('DISCONNECTED');
@@ -113,7 +120,47 @@ async function connectNative(): Promise<void> {
   }
 }
 
+
+setInterval(()=>void sendBridge.poll(),1000);
+chrome.tabs.onActivated?.addListener(()=>void sendBridge.poll());
+chrome.tabs.onUpdated?.addListener((_tabId,change)=>{if(change.status==='complete')void sendBridge.poll();});
+chrome.windows?.onFocusChanged?.addListener(()=>void sendBridge.poll());
+chrome.storage.onChanged?.addListener((changes,area)=>{if(area==='local' && ('waiExtensionSendsEnabled' in changes || 'waiMonitoringIntent' in changes))void sendBridge.poll();});
 chrome.runtime.onMessage.addListener((raw, sender, respond) => {
+  if(raw?.kind==='SEND_WAKE'){
+    if(sender.id===chrome.runtime.id && sender.origin==='https://web.whatsapp.com' && sender.tab?.id!==undefined)void sendBridge.poll();
+    respond({ok:true});return;
+  }
+  if(raw?.kind === 'GET_MONITOR_BOOT') {
+    if(sender.id!==chrome.runtime.id || sender.origin!=='https://web.whatsapp.com' || sender.tab?.id===undefined) {respond({ok:false});return;}
+    void (async()=>{
+      const stored=await chrome.storage.local.get(['waiMonitoringIntent','waiAutomaticAccountId','waiIdentityChoicesV1']);
+      let accountId=stored.waiAutomaticAccountId;
+      if(!z.uuid().safeParse(accountId).success) {
+        accountId=crypto.randomUUID();
+        await chrome.storage.local.set({waiAutomaticAccountId:accountId});
+      }
+      const monitoring=typeof stored.waiMonitoringIntent==='boolean'?stored.waiMonitoringIntent:(await getState()).monitoring;
+      respond({ok:true,accountId,monitoring});
+    })().catch(()=>respond({ok:false}));return true;
+  }
+  if(raw&&typeof raw==='object'&&'kind' in raw&&raw.kind==='SEND_PROGRESS') {
+    if(sender.origin!=='https://web.whatsapp.com'||sender.tab?.id===undefined){respond({ok:false});return;}
+    const tabId=sender.tab.id;
+    void getExtensionInstanceId().then(extensionInstanceId=>sendBridge.progress({...raw.input,extensionInstanceId},tabId)).then(()=>respond({ok:true})).catch(()=>respond({ok:false}));return true;
+  }
+
+  const identityCommand=IdentityControlSchema.safeParse(raw);
+  if(identityCommand.success) {
+    if(sender.id!==chrome.runtime.id||!sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/`)) {respond({ok:false,error:'UNAUTHORIZED_SENDER'});return;}
+    void (async()=>{
+      try {
+        const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+        if(tab?.id===undefined||!tab.url||new URL(tab.url).origin!=='https://web.whatsapp.com')throw new Error('Abra o WhatsApp Web na aba ativa.');
+        respond(await chrome.tabs.sendMessage(tab.id,identityCommand.data));
+      }catch{respond({ok:false,error:'Não foi possível acessar a conversa. Recarregue a aba do WhatsApp e confira os dados.'});}
+    })();return true;
+  }
   const command = parsePopupCommand(raw);
   if (command.success) {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/`)) {
@@ -123,7 +170,7 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
     void (async () => {
       try {
         const result = command.data.command === 'GET_STATE'
-          ? await getState()
+          ? await activeMonitorStatus(await getState(), chrome.tabs)
           : await applyMonitoring(command.data.command === 'MONITOR_START');
         respond({ ok: true, state: result });
       } catch {
@@ -147,8 +194,11 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
         const current = await getState();
         const next = {
           ...current,
+          errors:current.errors.filter(error=>error!=='Unable to reach the selected page.'),
           activities: current.retainActivitySummaries
-            ? [{ label: `${observation.data.captureState.toLowerCase()} observation queued`, timestamp: observation.data.observedAt }, ...current.activities].slice(0, 20)
+            ? [{ label: observation.data.observationType === 'MESSAGE'
+              ? `message ${observation.data.direction.toLowerCase()} ${observation.data.captureState.toLowerCase()} queued`
+              : 'conversation activity queued (no message content)', timestamp: observation.data.observedAt }, ...current.activities].slice(0, 20)
             : current.activities,
         };
         await saveState(next);
@@ -170,7 +220,7 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  void getState().then((state) => saveState({ ...state, monitoring: false }));
+  // Keep the persisted monitoring intent across extension updates.
   void connectNative();
 });
 

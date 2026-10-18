@@ -10,6 +10,7 @@ import {
   createConsistentBackup,
   openDatabase,
   applyMigrations,
+  migrations,
 } from '../src/index.js';
 const directories: string[] = [];
 function fixture() {
@@ -40,13 +41,41 @@ function msg(id: string, seq: number, now: string, key = `test-key-${id}-0000`) 
   };
 }
 describe('SQLite database engine', () => {
+  it('preserves schema 7 normalization links while enabling grouped conversations',()=>{
+    const db=openDatabase(':memory:',{migrate:false});
+    try {
+      applyMigrations(db,migrations.slice(0,7));
+      const conversation='11111111-1111-4111-8111-111111111111';const observation='22222222-2222-4222-8222-222222222222';
+      db.prepare(`INSERT INTO wa_conversations(id,connector,account_scope,kind,created_at,updated_at) VALUES(?,'fixture','synthetic','GROUP',?,?)`).run(conversation,'2026-10-18T12:00:00Z','2026-10-18T12:00:00Z');
+      db.prepare(`INSERT INTO wa_capture_observations(id,extension_instance_id,observation_type,capture_state,observed_at,payload_json) VALUES(?,'fixture','CONVERSATION_ACTIVITY','DETECTED',?,'{}')`).run(observation,'2026-10-18T12:00:00Z');
+      db.prepare(`INSERT INTO wa_capture_normalizations(observation_id,conversation_id,status) VALUES(?,?,'CONVERSATION_ONLY')`).run(observation,conversation);
+      applyMigrations(db);
+      expect(db.prepare('SELECT observation_id,conversation_id FROM wa_capture_normalizations').all()).toEqual([{observation_id:observation,conversation_id:conversation}]);
+      expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
+    }finally{db.close();}
+  });
+  it('upgrades schema 6 without changing existing rows or migration checksums', () => {
+    const db = openDatabase(':memory:', { migrate: false });
+    try {
+      applyMigrations(db, migrations.slice(0, 6));
+      const id = '00000000-0000-7000-8000-000000000099';
+      db.prepare(`INSERT INTO wa_conversations(id,connector,account_scope,kind,title,created_at,updated_at)
+        VALUES(?,'fixture','upgrade','UNKNOWN','Synthetic existing chat',?,?)`).run(id,'2026-10-17T12:00:00.000Z','2026-10-17T12:00:00.000Z');
+      const before = db.prepare('SELECT version, checksum FROM wa_schema_migrations ORDER BY version').all();
+      applyMigrations(db);
+      expect(db.prepare('SELECT version, checksum FROM wa_schema_migrations WHERE version<=6 ORDER BY version').all()).toEqual(before);
+      expect(db.prepare('SELECT title FROM wa_conversations WHERE id=?').get(id)).toEqual({title:'Synthetic existing chat'});
+      expect(db.prepare('SELECT COUNT(*) n FROM wa_capture_normalizations').get()).toEqual({n:0});
+      expect(db.pragma('integrity_check', {simple:true})).toBe('ok');expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally { db.close(); }
+  });
   it('initializes pragmas and migrations idempotently', () => {
     const { db } = fixture();
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 6 });
+    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 10 });
     applyMigrations(db);
-    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 6 });
+    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 10 });
     db.close();
   });
   it('inserts, queries recent messages and deduplicates idempotently', () => {
@@ -112,6 +141,7 @@ describe('SQLite database engine', () => {
     const recoveryClaim=states.claimForConsumer(recoveryId,'agent-a',now,1000);
     expect(states.listRecoverable('agent-a','2026-10-17T12:00:00.500Z')).toEqual([]);
     expect(states.listRecoverable('agent-a','2026-10-17T12:00:01.000Z')).toContainEqual({messageId:recoveryId,leaseExpired:true});
+    expect(()=>states.failForConsumer(recoveryId,'agent-a',recoveryClaim.claimToken,'MODEL_UNAVAILABLE','2026-10-17T12:00:01.000Z')).toThrow('ACK_FORBIDDEN');
     states.failForConsumer(recoveryId,'agent-a',recoveryClaim.claimToken,'MODEL_UNAVAILABLE','2026-10-17T12:00:00.500Z');
     expect(states.getForConsumer(recoveryId,'agent-a')).toMatchObject({state:'FAILED',lastErrorCode:'MODEL_UNAVAILABLE'});
     expect(states.listRecoverable('agent-a','2026-10-17T12:00:00.500Z')).toContainEqual({messageId:recoveryId,leaseExpired:false});

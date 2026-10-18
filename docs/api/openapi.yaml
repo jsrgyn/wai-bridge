@@ -41,7 +41,12 @@ paths:
         '401': { description: Unauthorized }
   /api/observations:
     post:
-      summary: Persist one incremental UI observation and its event atomically
+      summary: Persist one incremental UI observation, normalization and events atomically
+      description: >-
+        Known-direction MESSAGE observations become queryable messages with UNKNOWN identity
+        and sourceObservationId. Labels never merge identities; each observation has its own
+        internal conversation. Unknown direction stays staged. Activity creates no message.
+        The original observation event and optional message aggregate event contain no text.
       requestBody:
         required: true
         content:
@@ -279,6 +284,96 @@ paths:
           application/json:
             schema: { type: object, required: [result], properties: { result: { type: string, enum: [SENT, UNKNOWN, FAILED] }, evidenceRef: { type: string, minLength: 1, maxLength: 512 } }, allOf: [{ if: { properties: { result: { const: SENT } } }, then: { required: [evidenceRef] } }] }
       responses: { '200': { description: Manual outcome recorded from verified evidence }, '404': { $ref: '#/components/responses/Error' }, '409': { $ref: '#/components/responses/Error' } }
+  /api/extension/outbox:
+    post:
+      summary: Persist an authorized extension send with optional verified phone search
+      parameters:
+        - in: header
+          name: idempotency-key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExtensionSendRequest' }
+      responses:
+        '202': { description: Intent persisted; not a send confirmation }
+        '409': { description: Unknown conversation or conflicting idempotency }
+  /api/extension/outbox/phone:
+    post:
+      summary: Persist a send intent directly by international phone number
+      parameters:
+        - in: header
+          name: idempotency-key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [phoneNumber, text, explicitAuthorization]
+              properties:
+                phoneNumber: { type: string, minLength: 9, maxLength: 40, description: Full international phone with +DDI; formatting is normalized. }
+                accountId: { type: string, format: uuid, description: Optional only when exactly one recently active opted-in account exists. }
+                text: { type: string, minLength: 1, maxLength: 10000 }
+                mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
+                explicitAuthorization: { type: boolean, const: true }
+      responses:
+        '202': { description: Intent persisted or idempotently replayed; not delivery confirmation }
+        '409': { description: No fresh sending account, ambiguous account, or idempotency conflict }
+  /api/extension/outbox/recipient:
+    post:
+      summary: Resolve a stored recipient name to a unique phone and persist a send intent
+      parameters:
+        - in: header
+          name: idempotency-key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [recipientName, text, explicitAuthorization]
+              properties:
+                recipientName: { type: string, minLength: 2, maxLength: 256 }
+                accountId: { type: string, format: uuid }
+                text: { type: string, minLength: 1, maxLength: 10000 }
+                mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
+                explicitAuthorization: { type: boolean, const: true }
+      responses:
+        '202': { description: Intent persisted or replayed; not delivery confirmation }
+        '409': { description: Missing or ambiguous account, name or phone, search too broad, or idempotency conflict }
+  /api/extension/outbox/poll:
+    post:
+      summary: Native host claims one command for the current confirmed identity
+      description: Body follows ExtensionSendPollSchema in packages/shared/src/extension-send.ts. Requires extensionInstanceId; identity is optional only for diagnostics. Without identity no claim is possible. ready=false preflights without claim and may return pending=true. visible records observed readiness. Optional reason, protocolVersion=2 and clientBuild expose health. Optional activeCommand (id/contextId/leaseToken) authenticates supervision and returns activeStatus without another claim. With locateByPhone in the stored request, may claim a direct-contact command from another open context in the same local account; the extension must verify the visible profile phone. Response is null command or a leased command; never log lease tokens.
+      responses:
+        '200': { description: Validated ExtensionSendPollResultSchema }
+  /api/extension/outbox/progress:
+    post:
+      summary: Acknowledge durable progress before the extension send effect
+      description: Body follows ExtensionSendProgressSchema. Requires extension instance, context, command, lease token, step and code. SENT requires a visible-outbound SHA-256 evidence reference. SENDING requires completed countdown in AUTO. Phone-search WAITING_USER/WAITING_AUTO_SEND requires resolvedIdentity and conversationLabel matching the account and phone; persists observed contact and outbox conversation atomically.
+      responses:
+        '200': { description: Progress committed }
+        '409': { description: Invalid lease, context or transition }
+  /api/extension/outbox/{id}/cancel:
+    post:
+      summary: Cancel an extension send before SENDING
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Cancelled or already cancelled }
+        '409': { description: Execution already started or terminal }
 components:
   securitySchemes:
     LocalBearer: { type: http, scheme: bearer }
@@ -302,6 +397,16 @@ components:
       required: true
       schema: { type: string, minLength: 16, maxLength: 128 }
   schemas:
+    ExtensionSendRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, text, explicitAuthorization]
+      properties:
+        conversationId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 10000 }
+        mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
+        explicitAuthorization: { type: boolean, enum: [true] }
+        locateByPhone: { type: boolean, default: false, description: Search by stored direct-contact phone and verify the opened visible profile before composing. }
     Id: { type: string, format: uuid }
     CaptureObservation:
       type: object
@@ -328,6 +433,50 @@ components:
           type: array
           maxItems: 16
           items: { type: string, enum: [IMAGE, AUDIO, VIDEO, DOCUMENT, UNKNOWN] }
+        identity: { $ref: '#/components/schemas/ConversationIdentity' }
+    ConversationIdentity:
+      description: >-
+        Experimental local reference, manually confirmed or automatically observed. Requires a MESSAGE observation
+        with matching conversation kind and confirmedAt not later than observedAt.
+        PHONE is an observed profile number; GROUP_LOCAL is a user-assigned UUID,
+        not an official WhatsApp group ID. UI_CONTEXT uses an ephemeral local UUID and VISIBLE_UI evidence. confirmedAt then means observation time, not human confirmation. No source alone authorizes sending.
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [version, accountId, contextId, confirmedAt, type, source, phone]
+          properties:
+            version: { type: integer, const: 1 }
+            accountId: { $ref: '#/components/schemas/Id' }
+            contextId: { $ref: '#/components/schemas/Id' }
+            confirmedAt: { type: string, format: date-time }
+            type: { type: string, const: PHONE }
+            source: { type: string, const: PROFILE_PHONE }
+            phone: { type: string, pattern: '^\+[1-9][0-9]{7,14}$' }
+        - type: object
+          additionalProperties: false
+          required: [version, accountId, contextId, confirmedAt, type, source, groupId, groupLabel]
+          properties:
+            version: { type: integer, const: 1 }
+            accountId: { $ref: '#/components/schemas/Id' }
+            contextId: { $ref: '#/components/schemas/Id' }
+            confirmedAt: { type: string, format: date-time }
+            type: { type: string, const: GROUP_LOCAL }
+            source: { type: string, const: USER_GROUP }
+            groupId: { $ref: '#/components/schemas/Id' }
+            groupLabel: { type: string, minLength: 1, maxLength: 256 }
+        - type: object
+          additionalProperties: false
+          required: [version, accountId, contextId, confirmedAt, type, source, conversationKey, conversationKind]
+          properties:
+            version: { type: integer, const: 1 }
+            accountId: { $ref: '#/components/schemas/Id' }
+            contextId: { $ref: '#/components/schemas/Id' }
+            confirmedAt: { type: string, format: date-time }
+            type: { type: string, const: UI_CONTEXT }
+            source: { type: string, const: VISIBLE_UI }
+            conversationKey: { $ref: '#/components/schemas/Id' }
+            conversationKind: { type: string, enum: [INDIVIDUAL, GROUP, UNKNOWN] }
+            phone: { type: string, pattern: '^\+[1-9][0-9]{7,14}$', description: 'Optional visible profile phone; only permitted for INDIVIDUAL.' }
     CaptureSubmission:
       type: object
       additionalProperties: false

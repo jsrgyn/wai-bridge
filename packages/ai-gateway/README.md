@@ -8,8 +8,8 @@ AI processing boundary for the local REST API. The gateway does not open SQLite.
 - Claim leases default to 60 seconds and can be configured from 1 second through 24 hours. An expired lease can be reclaimed with a new token. Attempt counts persist across process restarts and drive the bounded retry policy.
 - `GET` is read-only. The recovery query includes messages with no consumer state yet, FAILED messages, and expired CLAIMED leases, ordered by observed timestamp and UUID.
 - State can be inspected per consumer through `AIMessageStateService.get()`; missing consumer rows are returned as virtual `UNREAD` without writing them.
-- ACK requires the current consumer, claim token, and a non-expired lease. Processing failure records FAILED and makes the message eligible for a later retry.
-- Duplicate notifications are deduplicated in memory; persisted state and idempotent event IDs remain the source of recovery after a process restart.
+- ACK and failure transitions require the current consumer, claim token, and a non-expired lease. Invalid processing results fail with `AI_RESULT_INVALID` without ACK. A failed post-ACK audit does not downgrade a durable READ state.
+- Notification receipt never suppresses later processing. `processEvent` uses durable per-consumer READ state to recognize completed work; claims serialize concurrent attempts. Resolution, claim, processing, or ACK failures allow a later delivery of the same event. Only message aggregates with UUID message IDs are accepted; staging observation events are ignored.
 
 ## Providers and media
 

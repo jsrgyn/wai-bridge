@@ -1,8 +1,24 @@
+import { ExtensionSendPollSchema, ExtensionSendProgressSchema, ExtensionSendPollResultSchema, ExtensionSendProgressResultSchema } from '@wai-bridge/shared';
 import { CaptureResultSchema, CaptureSubmissionSchema, ExtensionStateInputSchema } from '@wai-bridge/shared';
 import type { HostConfig } from './config.js';
 
 export class LocalApiClient {
   constructor(private readonly config: HostConfig, private readonly request: typeof fetch = fetch) {}
+
+  async sendPoll(input: unknown) {
+    return ExtensionSendPollResultSchema.parse(await this.sendRequest('poll',ExtensionSendPollSchema.parse(input)));
+  }
+  async sendProgress(input: unknown) {
+    return ExtensionSendProgressResultSchema.parse(await this.sendRequest('progress',ExtensionSendProgressSchema.parse(input)));
+  }
+  private async sendRequest(action: string, body: unknown) {
+    const response = await this.request(`${this.config.apiOrigin}/api/extension/outbox/${action}`, {
+      method:'POST', headers:{authorization:`Bearer ${this.config.apiToken}`,'content-type':'application/json'},
+      body:JSON.stringify(body), signal:AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('API_EXTENSION_SEND_FAILED');
+    return response.json() as Promise<unknown>;
+  }
 
   async health(): Promise<boolean> {
     try {

@@ -1,3 +1,4 @@
+import { ExtensionSendRepository } from '@wai-bridge/database';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
@@ -8,6 +9,7 @@ import {
   OutboxRepository,
   ExtensionStateRepository,
   CaptureObservationRepository,
+  CaptureNormalizationRepository,
 } from '@wai-bridge/database';
 import { EventRepository, EventService } from '@wai-bridge/events';
 import { OutboxCancellationService, OutboxService } from '@wai-bridge/outbox-engine';
@@ -64,6 +66,7 @@ export class ApiService {
     return {
       status: 'ok',
       database: 'connected',
+      extension: new ExtensionSendRepository(this.db).diagnostics(),
       schemaVersion: (
         this.db.prepare('SELECT MAX(version) version FROM wa_schema_migrations').get() as {
           version: number | null;
@@ -77,23 +80,38 @@ export class ApiService {
   }
   recordObservation(input: { extensionInstanceId: string; observation: CaptureObservation }) {
     try {
-      const result = this.observations.record(input.extensionInstanceId, input.observation, (observation) => {
-        const type = observation.observationType === 'CONVERSATION_ACTIVITY'
-          ? 'conversation.detected'
-          : observation.captureState === 'CAPTURED' ? 'message.captured' : 'message.detected';
-        return this.eventService.publish({
-          id: randomUUID(),
-          type,
-          aggregateType: 'capture-observation',
-          aggregateId: observation.observationId,
-          occurredAt: observation.observedAt,
-          payloadVersion: 1,
-          payload: { observationId: observation.observationId, captureState: observation.captureState, observationType: observation.observationType },
-          idempotencyScope: `capture-observation:${input.extensionInstanceId}`,
-          idempotencyKey: observation.observationId,
-        }).event.id;
+      const tx = this.db.transaction(() => {
+        const result = this.observations.record(input.extensionInstanceId, input.observation, (observation) => {
+          const type = observation.observationType === 'CONVERSATION_ACTIVITY'
+            ? 'conversation.detected'
+            : observation.captureState === 'CAPTURED' ? 'message.captured' : 'message.detected';
+          return this.eventService.publish({
+            id: randomUUID(),
+            type,
+            aggregateType: 'capture-observation',
+            aggregateId: observation.observationId,
+            occurredAt: observation.observedAt,
+            payloadVersion: 1,
+            payload: { observationId: observation.observationId, captureState: observation.captureState, observationType: observation.observationType },
+            idempotencyScope: `capture-observation:${input.extensionInstanceId}`,
+            idempotencyKey: observation.observationId,
+          }).event.id;
+        });
+        const normalized = new CaptureNormalizationRepository(this.db).normalize(input.extensionInstanceId, input.observation);
+        if (normalized.created && normalized.messageId) {
+          this.eventService.publish({
+            id: randomUUID(),
+            type: input.observation.captureState === 'CAPTURED' ? 'message.captured' : 'message.detected',
+            aggregateType: 'message', aggregateId: normalized.messageId,
+            occurredAt: input.observation.observedAt, payloadVersion: 1,
+            payload: { observationId: input.observation.observationId, conversationId: normalized.conversationId, identityStatus: input.observation.identity ? 'PARTIAL' : 'UNKNOWN' },
+            idempotencyScope: `normalized-message:${input.extensionInstanceId}`,
+            idempotencyKey: input.observation.observationId,
+          });
+        }
+        return { observationId: input.observation.observationId, ...result };
       });
-      return { observationId: input.observation.observationId, ...result };
+      return tx.immediate();
     } catch (error) {
       if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') throw conflict('IDEMPOTENCY_CONFLICT', 'Observation ID has different content');
       throw error;
@@ -231,6 +249,18 @@ export class ApiService {
       throw error;
     }
   }
+  createExtensionRecipientSend(input:unknown,key:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToName(input,key));}
+  createExtensionPhoneSend(input:unknown,key:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToNumber(input,key));}
+  createExtensionSend(input: unknown, key: string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).create(input,key)); }
+  pollExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).poll(input)); }
+  progressExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).progress(input)); }
+  cancelExtensionSend(id: string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).cancel(id)); }
+  private extensionSendCall<T>(run: () => T): T {
+    try { return run(); } catch(error) {
+      if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)) throw conflict(error.message,'Extension send request rejected');
+      throw error;
+    }
+  }
   createOutbox(
     input: {
       recipientId: string;
@@ -251,20 +281,26 @@ export class ApiService {
     }
   }
   outbox(query: PageQuery) {
+    new ExtensionSendRepository(this.db).recover();
     const items = this.commands.list(query.limit, decodeCursor(query.cursor));
     return page(items, query.limit, (x) => String((x as { id: string }).id));
   }
   outboxItem(id: string) {
+    new ExtensionSendRepository(this.db).recover();
     const item = this.commands.get(id);
     if (!item) throw notFound('Command');
-    return { command: item, history: this.outboxRepository.history(id) };
+    const command={...(item as Record<string,unknown>)};
+    if(command.kind==='extension-send')delete command.lease_owner;
+    return { command, history: this.outboxRepository.history(id) };
   }
   cancelOutbox(id: string) {
+    if(this.outboxRepository.get(id)?.kind==='extension-send'){this.cancelExtensionSend(id);return this.outboxItem(id);}
     try{this.outboxCancellation.cancel(id,'local-api-user');}
     catch(error){if(error instanceof Error&&error.message==='COMMAND_NOT_FOUND')throw notFound('Command');if(error instanceof Error&&error.message==='OUTBOX_CANNOT_CANCEL')throw conflict('STATE_CONFLICT','Command can no longer be cancelled');if(error instanceof Error&&error.message==='OUTBOX_STATE_CONFLICT')throw conflict('STATE_CONFLICT','Command can no longer be cancelled');throw error;}
     return this.outboxItem(id);
   }
   recordOutboxResult(id:string,result:'SENT'|'UNKNOWN'|'FAILED',evidenceRef?:string){
+    if(this.outboxRepository.get(id)?.kind==='extension-send')throw conflict('EXTENSION_RESULT_REQUIRED','Use the authenticated extension result channel');
     try{return this.outboxService.recordManualResult(id,result,evidenceRef);}
     catch(error){if(error instanceof Error&&error.message==='COMMAND_NOT_FOUND')throw notFound('Command');if(error instanceof Error&&['OUTBOX_STATE_CONFLICT','VERIFIED_EVIDENCE_REQUIRED'].includes(error.message))throw conflict('STATE_CONFLICT',error.message);throw error;}
   }

@@ -12,6 +12,64 @@ function dispatcher(repository:OutboxRepository,service:OutboxService,options:{e
 afterEach(()=>{for(const db of dbs.splice(0))if(db.open)db.close();for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 
 describe('transactional outbox engine',()=>{
+  it('prevents a stale resolver from changing a command reclaimed by another worker',async()=>{
+    const {repository,service}=setup();const command=create(service);
+    let clock=now;const liveService=new OutboxService(repository,()=>clock);
+    let entered!:()=>void;const resolved=new Promise<void>((resolve)=>{entered=resolve;});
+    let release!:()=>void;const held=new Promise<void>((resolve)=>{release=resolve;});
+    const worker=dispatcher(repository,liveService,{now:()=>clock,resolver:{resolve:async()=>{entered();await held;return{status:'VERIFIED'};}}});
+    const running=worker.dispatchOne();await resolved;
+    clock='2026-10-17T12:00:04.000Z';
+    repository.recoverExpired(clock,'recovery',false);repository.claimNext('new-worker',clock,3000);
+    release();await expect(running).rejects.toThrow('OUTBOX_LEASE_EXPIRED');
+    expect(repository.get(command.id)).toMatchObject({status:'CLAIMED',leaseOwner:'new-worker'});
+  });
+  it('recovers preparation on a later poll when restart precedes lease expiry',async()=>{
+    const {repository,service}=setup();const command=create(service,'AUTO');
+    service.transition(command.id,'QUEUED','test','QUEUE');repository.claimNext('crashed',now,1000);
+    service.transition(command.id,'TARGET_VERIFIED','crashed','VERIFY');
+    let clock=now;const execute=vi.fn();const worker=dispatcher(repository,service,{now:()=>clock,executor:{execute}});
+    expect(await worker.recoverAfterRestart()).toBe(0);
+    expect(await worker.dispatchOne()).toBeUndefined();
+    clock='2026-10-17T12:00:02.000Z';
+    expect(await worker.dispatchOne()).toBeUndefined();
+    expect(repository.get(command.id)?.resultCode).toBe('PREPARATION_INTERRUPTED');
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('does not cancel a live AUTO countdown during periodic lease recovery',async()=>{
+    const {repository,service}=setup();const command=create(service,'AUTO');
+    let entered!:()=>void;const waitEntered=new Promise<void>((resolve)=>{entered=resolve;});
+    let release!:()=>void;const held=new Promise<void>((resolve)=>{release=resolve;});
+    const worker=dispatcher(repository,service,{authorize:true,waiter:{wait:async()=>{entered();await held;}}});
+    const running=worker.dispatchOne();await waitEntered;
+    expect(await dispatcher(repository,service).dispatchOne()).toBeUndefined();
+    expect(repository.get(command.id)?.status).toBe('WAITING_AUTO_SEND');
+    release();expect((await running)?.status).toBe('SENT');
+  });
+  it.each(['TARGET_VERIFIED','COMPOSED'] as const)('terminates interrupted %s preparation after reopening SQLite',async(status)=>{
+    const {db,repository,service}=setup();const command=create(service,'AUTO');
+    service.transition(command.id,'QUEUED','test','QUEUE');repository.claimNext('crashed',now,1000);
+    service.transition(command.id,'TARGET_VERIFIED','crashed','VERIFY');
+    if(status==='COMPOSED')service.transition(command.id,'COMPOSED','crashed','COMPOSE');
+    const path=db.name;db.close();const reopened=openDatabase(path);dbs.push(reopened);
+    const repo=new OutboxRepository(reopened);const restored=new OutboxService(repo,()=> '2026-10-17T12:00:02.000Z');
+    const execute=vi.fn();const worker=dispatcher(repo,restored,{now:()=> '2026-10-17T12:00:02.000Z',executor:{execute}});
+    expect(await worker.recoverAfterRestart()).toBe(1);
+    expect(repo.get(command.id)).toMatchObject({status:'FAILED',resultCode:'PREPARATION_INTERRUPTED',leaseOwner:null,leaseUntil:null});
+    expect(await worker.recoverAfterRestart()).toBe(0);
+    expect(await worker.dispatchOne()).toBeUndefined();expect(execute).not.toHaveBeenCalled();
+    expect(restored.get(command.id).history.at(-1)).toMatchObject({fromStatus:status,toStatus:'FAILED',reasonCode:'PREPARATION_INTERRUPTED'});
+  });
+  it.each(['TARGET_VERIFIED','COMPOSED'] as const)('recovers legacy %s without a lease but preserves a live lease',async(status)=>{
+    const {repository,service}=setup();const command=create(service);
+    service.transition(command.id,'QUEUED','test','QUEUE');repository.claimNext('live',now,3000);
+    service.transition(command.id,'TARGET_VERIFIED','live','VERIFY');
+    if(status==='COMPOSED')service.transition(command.id,'COMPOSED','live','COMPOSE');
+    expect(await dispatcher(repository,service).recoverAfterRestart()).toBe(0);
+    repository.transition(command.id,status,status,'test',now,'LEGACY_FIXTURE',{leaseOwner:null,leaseUntil:null});
+    expect(await dispatcher(repository,service).recoverAfterRestart()).toBe(1);
+    expect(repository.get(command.id)?.status).toBe('FAILED');
+  });
   it('defaults to SUPERVISED and deduplicates by idempotency key',()=>{const{db,service}=setup();const first=create(service);const duplicate=service.create({recipientId,text:'Synthetic message',explicitAuthorization:true},'test-scope','outbox-idempotency-000001');expect(first.status).toBe('REQUESTED');expect((first.payload as {mode:string}).mode).toBe('SUPERVISED');expect(duplicate.inserted).toBe(false);expect(duplicate.id).toBe(first.id);expect(db.prepare('SELECT count(*) AS n FROM wa_outbox').get()).toEqual({n:1});expect(db.prepare('SELECT count(*) AS n FROM wa_outbox_history WHERE command_id=?').get(first.id)).toEqual({n:1});});
   it('queues, claims, verifies and prepares SUPERVISED without invoking executor',async()=>{const{service,repository}=setup();const command=create(service);const execute=vi.fn();const result=await dispatcher(repository,service,{executor:{execute} as SendExecutor}).dispatchOne();expect(result?.status).toBe('WAITING_USER');expect(execute).not.toHaveBeenCalled();expect(service.get(command.id).history.map((x)=>x.toStatus)).toEqual(['REQUESTED','QUEUED','CLAIMED','TARGET_VERIFIED','COMPOSED','WAITING_USER']);});
   it('AUTO requires explicit authorization, waits five cancelable seconds, and uses only simulation',async()=>{const{service,repository}=setup();const command=create(service,'AUTO');const wait=vi.fn(async(ms:number)=>{expect(ms).toBe(5000);});const result=await dispatcher(repository,service,{authorize:true,waiter:{wait} as Waiter}).dispatchOne();expect(result?.status).toBe('SENT');expect(result?.resultRef).toBe(`simulated:${command.id}`);expect(wait).toHaveBeenCalledOnce();});

@@ -1,11 +1,20 @@
 export class CaptureStateManager {
   private readonly messages = new WeakSet<HTMLElement>();
+  private readonly renderKeys = new WeakMap<HTMLElement, Set<string>>();
   private readonly unreadCounts = new WeakMap<HTMLElement, number>();
   private readonly rows = new WeakSet<HTMLElement>();
 
-  claimMessage(message: HTMLElement): boolean {
+  claimMessage(message: HTMLElement, root?: HTMLElement, renderKey?: string): boolean {
     if (this.messages.has(message)) return false;
     this.messages.add(message);
+    if (root && renderKey) {
+      const keys = this.renderKeys.get(root) ?? new Set<string>();
+      if (keys.has(renderKey)) return false;
+      keys.add(renderKey);
+      // Bounded, memory-only cache. Equal text is never a duplicate criterion.
+      if (keys.size > 2_000) keys.delete(keys.values().next().value!);
+      this.renderKeys.set(root, keys);
+    }
     return true;
   }
 

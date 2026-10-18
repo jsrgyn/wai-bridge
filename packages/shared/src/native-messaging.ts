@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ExtensionSendPollSchema, ExtensionSendProgressSchema, ExtensionSendPollResultSchema, ExtensionSendProgressResultSchema } from './extension-send.js';
+import { ConversationIdentitySchema } from './conversation-identity.js';
 
 const UtcTimestampSchema = z.iso.datetime().refine((value) => value.endsWith('Z'));
 const RequestBase = z.object({ version: z.literal(1), id: z.string().uuid() });
@@ -18,7 +20,14 @@ export const CaptureObservationSchema = z.object({
   content: z.string().max(10_000).nullable(),
   contentAvailability: z.enum(['AVAILABLE', 'UNAVAILABLE']),
   media: z.array(z.enum(['IMAGE', 'AUDIO', 'VIDEO', 'DOCUMENT', 'UNKNOWN'])).max(16),
-}).strict();
+  identity: ConversationIdentitySchema.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (!value.identity) return;
+  if (value.observationType !== 'MESSAGE' || value.conversation.kind !== (value.identity.type === 'PHONE' ? 'INDIVIDUAL' : value.identity.type === 'UI_CONTEXT' ? value.identity.conversationKind : 'GROUP')) {
+    ctx.addIssue({code:'custom',message:'Identity does not match the message context',path:['identity']});
+  }
+  if (Date.parse(value.identity.confirmedAt) > Date.parse(value.observedAt)) ctx.addIssue({code:'custom',message:'Confirmation must precede observation',path:['identity','confirmedAt']});
+});
 
 export const CaptureSubmissionSchema = z.object({
   extensionInstanceId: z.string().uuid(),
@@ -35,10 +44,14 @@ export const NativeRequestSchema = z.discriminatedUnion('type', [
   RequestBase.extend({ type: z.literal('HELLO'), extensionInstanceId: z.string().uuid() }),
   RequestBase.extend({ type: z.literal('HEARTBEAT'), extensionInstanceId: z.string().uuid() }),
   RequestBase.extend({ type: z.literal('STATUS_REQUEST') }),
+  RequestBase.extend({ type:z.literal('SEND_POLL'), input:ExtensionSendPollSchema }),
+  RequestBase.extend({ type:z.literal('SEND_PROGRESS'), input:ExtensionSendProgressSchema }),
   RequestBase.extend({ type: z.literal('CAPTURE_OBSERVATION'), extensionInstanceId: z.string().uuid(), observation: CaptureObservationSchema }),
 ]);
 
 export const NativeResponseSchema = z.discriminatedUnion('type', [
+  RequestBase.extend({type:z.literal('SEND_POLL_RESULT'), result:ExtensionSendPollResultSchema}),
+  RequestBase.extend({type:z.literal('SEND_PROGRESS_RESULT'), result:ExtensionSendProgressResultSchema}),
   RequestBase.extend({ type: z.literal('HOST_STATE'), connected: z.boolean(), hostInstanceId: z.string().uuid(), at: UtcTimestampSchema }),
   RequestBase.extend({ type: z.literal('STATUS_RESULT'), api: z.enum(['AVAILABLE', 'UNAVAILABLE']), at: UtcTimestampSchema }),
   RequestBase.extend({ type: z.literal('ERROR'), code: z.enum(['INVALID_REQUEST', 'API_UNAVAILABLE']), at: UtcTimestampSchema }),

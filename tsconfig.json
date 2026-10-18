@@ -1,1 +1,1 @@
-{"files":[],"references":[{"path":"./packages/shared"},{"path":"./packages/database"},{"path":"./packages/events"},{"path":"./packages/media"},{"path":"./packages/outbox-engine"},{"path":"./apps/local-api"},{"path":"./apps/mac-agent"},{"path":"./packages/ai-gateway"}]}
+{"files":[],"references":[{"path":"./packages/shared"},{"path":"./packages/database"},{"path":"./packages/events"},{"path":"./packages/outbox-engine"},{"path":"./apps/local-api"},{"path":"./apps/mac-agent"},{"path":"./packages/ai-gateway"}]}

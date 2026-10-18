@@ -12,7 +12,7 @@ export class MonitorObserver {
   private readonly conversations: ConversationObserver;
   private documentObserver: MutationObserver | undefined;
 
-  constructor(emit: (observation: CaptureObservation) => void, report: (message: string) => void) {
+  constructor(emit: (observation: CaptureObservation, root?: HTMLElement) => void, report: (message: string) => void) {
     this.messages = new MessageObserver(emit, report, this.state, this.adapter);
     this.conversations = new ConversationObserver(emit, this.state, this.adapter);
   }

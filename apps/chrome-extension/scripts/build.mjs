@@ -20,7 +20,7 @@ await cp(new URL('../src/popup/popup.css', import.meta.url), new URL('popup.css'
 await cp(new URL('../src/options/options.html', import.meta.url), new URL('options.html', out));
 await cp(new URL('../src/options/options.css', import.meta.url), new URL('options.css', out));
 
-const options = { entryPoints: entries, outdir: out.pathname, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120' };
+const options = { define:{__WAI_BUILD_ID__:JSON.stringify(new Date().toISOString())}, entryPoints: entries, outdir: out.pathname, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120' };
 if (watch) {
   const ctx = await context(options);
   await ctx.watch();

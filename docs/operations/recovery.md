@@ -9,7 +9,7 @@
    ./apps/mac-agent/scripts/restore-macos.sh --confirm "$HOME/Library/Application Support/WaiBridge/backups/wai-bridge-<timestamp>.sqlite"
    ```
 
-3. O script descarrega o LaunchAgent se estiver carregado, exige `--confirm`, valida integridade e schema 1–6, salva snapshot pre-restore do banco atual e troca o banco por rename atômico. O serviço permanece parado.
+3. O script descarrega o LaunchAgent se estiver carregado, exige `--confirm`, valida integridade e schema 1–8, salva snapshot pre-restore do banco atual e troca o banco por rename atômico. O serviço permanece parado.
 4. Rode `diagnose-macos.sh`. Confira integridade/schema. Revise dados restaurados e então execute `install-macos.sh --load` para reativar explicitamente.
 
 Se o processo falhar antes do rename, o banco ativo permanece. O snapshot pre-restore fica em `data/backups/`. Não copie um `.sqlite` sobre banco ativo sem parar a API. Arquivos WAL/SHM antigos são removidos apenas pelo script depois que o LaunchAgent foi descarregado.

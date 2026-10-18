@@ -154,10 +154,10 @@ describe('local REST API', () => {
     expect(first.json()).toMatchObject({ observationId: observation.observationId, duplicate: false });
     expect(new CaptureObservationRepository(db).get(observation.observationId)?.content).toBe('Synthetic new text');
     expect((await app.inject({ method: 'GET', url: `/api/observations/${observation.observationId}`, headers: auth() })).json().content).toBe('Synthetic new text');
-    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 1);
+    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 2);
     const retry = await app.inject({ method: 'POST', url: '/api/observations', headers: auth(), payload });
     expect(retry.json()).toEqual({ ...first.json(), duplicate: true });
-    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 1);
+    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 2);
     const conflict = await app.inject({ method: 'POST', url: '/api/observations', headers: auth(), payload: { ...payload, observation: { ...observation, content: 'Changed' } } });
     expect(conflict.statusCode).toBe(409);
   });

@@ -1,5 +1,18 @@
 # WAI Bridge — auditoria final de integração, segurança e release
 
+Atualização de escopo em 2026-10-18: correções REV-001/002/003 e a normalização
+local observação → registros consultáveis no MCP foram implementadas e testadas;
+consulte [validação posterior](normalization-validation.md) e ADR 0008. A auditoria
+abaixo permanece como registro de 2026-10-17. Identidade estável, agrupamento de
+conversas e compatibilidade de captura real continuam pendentes; não há aprovação
+de produção implícita nesta atualização.
+
+Atualização adicional de 2026-10-18: referências telefônicas e grupos locais
+confirmados permitem agrupar novas observações conforme ADR 0009, com identidade
+PARTIAL e limites explícitos. Ver [validação de identidade](conversation-identity-validation.md).
+Isso não demonstra identidade oficial estável do WhatsApp nem compatibilidade de
+captura real; não altera o parecer de produção da auditoria histórica abaixo.
+
 **Data da auditoria:** 2026-10-17 (ambiente local)  
 **Escopo:** revisão dos fontes e contratos no workspace, validações automatizadas listadas em `test-results.md`, inspeção de scripts macOS e smoke test de backup/restauração. Nenhum serviço LaunchAgent foi carregado; nenhuma conta WhatsApp real foi conectada; nenhum envio real foi feito.
 

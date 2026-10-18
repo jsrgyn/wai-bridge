@@ -75,20 +75,28 @@ describe('Native Messaging framing', () => {
 });
 
 describe('native host authorization and lifecycle', () => {
-  it('rejects a caller origin that is not the configured extension', async () => {
+  it.each([
+    'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/',
+    `chrome-extension://${extensionId}/unexpected`,
+    `chrome-extension://${extensionId}//`,
+    `chrome-extension://${extensionId}?query=1`,
+    `chrome-extension://${extensionId}.example/`,
+    '',
+  ])('rejects unauthorized caller origin %s', async (callerOrigin) => {
     const input = new PassThrough();
     input.end();
     await expect(runNativeHost({
       input,
       output: new PassThrough(),
       stderr: new PassThrough(),
-      callerOrigin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      callerOrigin,
       config,
       api: { health: vi.fn(), recordExtensionState: vi.fn() } as unknown as LocalApiClient,
     })).rejects.toThrow('UNAUTHORIZED_EXTENSION_ORIGIN');
   });
 
-  it('handshakes, answers allowlisted commands, persists state, and recovers on a new process', async () => {
+  it.each(['', '/'])('handshakes, answers commands, and reconnects with origin suffix "%s"', async (suffix) => {
     const input = new PassThrough();
     const output = new PassThrough();
     const chunks: Buffer[] = [];
@@ -98,7 +106,7 @@ describe('native host authorization and lifecycle', () => {
     const hello = { version: 1, id: randomUUID(), type: 'HELLO', extensionInstanceId };
     const status = { version: 1, id: randomUUID(), type: 'STATUS_REQUEST' };
     const heartbeat = { version: 1, id: randomUUID(), type: 'HEARTBEAT', extensionInstanceId };
-    const run = runNativeHost({ input, output, stderr: new PassThrough(), callerOrigin: `chrome-extension://${extensionId}`, config, api, heartbeatMs: 60_000 });
+    const run = runNativeHost({ input, output, stderr: new PassThrough(), callerOrigin: `chrome-extension://${extensionId}${suffix}`, config, api, heartbeatMs: 60_000 });
     input.write(Buffer.concat([frame(hello), frame(status), frame(heartbeat), frame(heartbeat)]));
     input.end();
     await run;
@@ -112,7 +120,7 @@ describe('native host authorization and lifecycle', () => {
     const reconnectOutput = new PassThrough();
     const reconnectChunks: Buffer[] = [];
     reconnectOutput.on('data', (chunk: Buffer) => reconnectChunks.push(chunk));
-    const reconnect = runNativeHost({ input: reconnectInput, output: reconnectOutput, stderr: new PassThrough(), callerOrigin: `chrome-extension://${extensionId}`, config, api, heartbeatMs: 60_000 });
+    const reconnect = runNativeHost({ input: reconnectInput, output: reconnectOutput, stderr: new PassThrough(), callerOrigin: `chrome-extension://${extensionId}${suffix}`, config, api, heartbeatMs: 60_000 });
     reconnectInput.end(frame({ version: 1, id: randomUUID(), type: 'HELLO', extensionInstanceId }));
     await reconnect;
     expect(decodeFrames(Buffer.concat(reconnectChunks))).toHaveLength(1);
@@ -141,4 +149,17 @@ describe('native host authorization and lifecycle', () => {
     expect(replies.map((item) => item.type)).toEqual(['HOST_STATE', 'CAPTURE_RESULT']);
     expect(replies[1]?.observationId).toBe(observation.observationId);
   });
+});
+
+it('answers send control frames while observation persistence is stalled',async()=>{
+ const input=new PassThrough();const output=new PassThrough();const chunks:Buffer[]=[];output.on('data',(chunk:Buffer)=>chunks.push(chunk));
+ let release:()=>void=()=>{};
+ const blocked=new Promise<void>(resolve=>{release=resolve;});
+ const observationId=randomUUID();
+ const api={recordExtensionState:vi.fn(),recordObservation:async()=>{await blocked;return {observationId,eventId:randomUUID(),duplicate:false};},sendPoll:vi.fn().mockResolvedValue({command:null})} as unknown as LocalApiClient;
+ const running=runNativeHost({input,output,stderr:new PassThrough(),callerOrigin:`chrome-extension://${extensionId}`,config,api});
+ const pollId=randomUUID();
+ input.write(Buffer.concat([frame({version:1,id:randomUUID(),type:'HELLO',extensionInstanceId}),frame({version:1,id:observationId,type:'CAPTURE_OBSERVATION',extensionInstanceId,observation:{kind:'CAPTURE_OBSERVATION',observationId,observedAt:new Date().toISOString(),observationType:'CONVERSATION_ACTIVITY',captureState:'DETECTED',conversation:{label:'Synthetic control latency',kind:'UNKNOWN'},senderLabel:null,direction:'UNKNOWN',content:null,contentAvailability:'UNAVAILABLE',media:[]}}),frame({version:1,id:pollId,type:'SEND_POLL',input:{extensionInstanceId,allowClaim:false,ready:false,reason:'CONTENT_UNREACHABLE',protocolVersion:2}})]));
+ try{await vi.waitFor(()=>expect(decodeFrames(Buffer.concat(chunks))).toContainEqual(expect.objectContaining({id:pollId,type:'SEND_POLL_RESULT'})));}
+ finally{release();input.end();await running;}
 });

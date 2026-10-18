@@ -25,21 +25,22 @@ export class OutboxDispatcher {
   stop():void{this.stopped=true;for(const controller of this.activeWaits.values())controller.abort();}
   async run(pollIntervalMs=500):Promise<void>{this.stopped=false;await this.recoverAfterRestart();while(!this.stopped){try{const processed=await this.dispatchOne();if(!processed)await new Promise((resolve)=>setTimeout(resolve,pollIntervalMs));}catch(error){process.stderr.write(`${JSON.stringify({level:'error',message:'outbox.dispatch.failed',errorCode:code(error)})}\n`);await new Promise((resolve)=>setTimeout(resolve,pollIntervalMs));}}}
   async dispatchOne():Promise<OutboxCommand|undefined>{
+    this.repository.recoverExpired(this.now(),this.workerId,false);
     const requested=this.repository.nextRequested();if(requested){try{this.service.transition(requested.id,'QUEUED',this.workerId,'COMMAND_QUEUED');}catch(error){if(this.repository.get(requested.id)?.status==='REQUESTED')throw error;}}
     const command=this.repository.claimNext(this.workerId,this.now(),this.leaseMs);if(!command)return undefined;
-    try{return await this.prepareAndDispatch(command);}catch(error){const current=this.repository.get(command.id);if(current&&['CLAIMED','TARGET_VERIFIED','COMPOSED'].includes(current.status))return this.service.transition(command.id,'FAILED',this.workerId,'DISPATCH_FAILURE',{leaseOwner:null,leaseUntil:null,resultCode:code(error)});throw error;}
+    try{return await this.prepareAndDispatch(command);}catch(error){const current=this.repository.get(command.id);if(current&&current.leaseOwner===this.workerId&&current.leaseUntil&&current.leaseUntil>this.now()&&['CLAIMED','TARGET_VERIFIED','COMPOSED'].includes(current.status))return this.service.transition(command.id,'FAILED',this.workerId,'DISPATCH_FAILURE',{leaseOwner:null,leaseUntil:null,resultCode:code(error),requiredLeaseOwner:this.workerId});throw error;}
   }
   async recoverAfterRestart():Promise<number>{return this.repository.recoverExpired(this.now(),this.workerId);}
   private async prepareAndDispatch(command:OutboxCommand):Promise<OutboxCommand>{
     const payload=command.payload as {recipientId:string;text:string;mode:'AUTO'|'SUPERVISED';explicitAuthorization:true};
     const resolution=await this.resolver.resolve(payload.recipientId);
-    if(resolution.status!=='VERIFIED')return this.service.transition(command.id,'FAILED',this.workerId,resolution.status==='AMBIGUOUS'?'RECIPIENT_AMBIGUOUS':'RECIPIENT_NOT_FOUND',{leaseOwner:null,leaseUntil:null,resultCode:resolution.status});
-    this.service.transition(command.id,'TARGET_VERIFIED',this.workerId,'RECIPIENT_VERIFIED',{leaseOwner:null,leaseUntil:null});
-    this.service.transition(command.id,'COMPOSED',this.workerId,'MESSAGE_PREPARED');
-    if(payload.mode==='SUPERVISED')return this.service.transition(command.id,'WAITING_USER',this.workerId,'MANUAL_SEND_REQUIRED');
-    if(!payload.explicitAuthorization||!await this.authorization.verify(command))return this.service.transition(command.id,'FAILED',this.workerId,'EXPLICIT_AUTHORIZATION_REQUIRED',{resultCode:'AUTHORIZATION_REQUIRED'});
+    if(resolution.status!=='VERIFIED')return this.service.transition(command.id,'FAILED',this.workerId,resolution.status==='AMBIGUOUS'?'RECIPIENT_AMBIGUOUS':'RECIPIENT_NOT_FOUND',{leaseOwner:null,leaseUntil:null,resultCode:resolution.status,requiredLeaseOwner:this.workerId});
+    this.service.transition(command.id,'TARGET_VERIFIED',this.workerId,'RECIPIENT_VERIFIED',{requiredLeaseOwner:this.workerId});
+    this.service.transition(command.id,'COMPOSED',this.workerId,'MESSAGE_PREPARED',{requiredLeaseOwner:this.workerId});
+    if(payload.mode==='SUPERVISED')return this.service.transition(command.id,'WAITING_USER',this.workerId,'MANUAL_SEND_REQUIRED',{leaseOwner:null,leaseUntil:null,requiredLeaseOwner:this.workerId});
+    if(!payload.explicitAuthorization||!await this.authorization.verify(command))return this.service.transition(command.id,'FAILED',this.workerId,'EXPLICIT_AUTHORIZATION_REQUIRED',{resultCode:'AUTHORIZATION_REQUIRED',leaseOwner:null,leaseUntil:null,requiredLeaseOwner:this.workerId});
     const dueAt=new Date(Date.parse(this.now())+this.autoDelayMs).toISOString();
-    this.service.transition(command.id,'WAITING_AUTO_SEND',this.workerId,'AUTO_DELAY_STARTED',{nextAttemptAt:dueAt});
+    this.service.transition(command.id,'WAITING_AUTO_SEND',this.workerId,'AUTO_DELAY_STARTED',{nextAttemptAt:dueAt,leaseOwner:null,leaseUntil:null,requiredLeaseOwner:this.workerId});
     const waitController=new AbortController();this.activeWaits.set(command.id,waitController);
     try{await this.waiter.wait(this.autoDelayMs,waitController.signal);}catch{const cancelled=this.repository.get(command.id);if(!cancelled)throw new Error('COMMAND_NOT_FOUND');return cancelled;}
     finally{this.activeWaits.delete(command.id);}

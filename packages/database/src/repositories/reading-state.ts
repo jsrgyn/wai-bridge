@@ -165,8 +165,8 @@ export class AIMessageStateRepository {
   failForConsumer(messageId: string, consumerId: string, claimToken: string, errorCode: string, now: string): void {
     const id = z.uuid().parse(messageId); const consumer = ConsumerSchema.parse(consumerId); const token = z.uuid().parse(claimToken); const code = z.string().regex(/^[A-Z0-9_]{1,64}$/).parse(errorCode); UtcTimestampSchema.parse(now);
     const tx = this.db.transaction(() => {
-      const row = this.db.prepare(`SELECT state,claim_token FROM wa_ai_consumer_message_state WHERE message_id=? AND consumer_id=?`).get(id, consumer) as { state: string; claim_token: string | null } | undefined;
-      if (!row || row.state !== 'CLAIMED' || row.claim_token !== token) throw new Error('ACK_FORBIDDEN');
+      const row = this.db.prepare(`SELECT state,claim_token,lease_until FROM wa_ai_consumer_message_state WHERE message_id=? AND consumer_id=?`).get(id, consumer) as { state: string; claim_token: string | null; lease_until: string | null } | undefined;
+      if (!row || row.state !== 'CLAIMED' || row.claim_token !== token || !row.lease_until || row.lease_until <= now) throw new Error('ACK_FORBIDDEN');
       this.db.prepare(`UPDATE wa_ai_consumer_message_state SET state='FAILED',version=version+1,claim_token=NULL,lease_until=NULL,last_error_code=?,updated_at=? WHERE message_id=? AND consumer_id=?`).run(code, now, id, consumer);
       this.audit(id, 'CLAIMED', 'FAILED', consumer, now);
     });
