@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node"]
+  },
+  "references": [{ "path": "../../packages/database" }, { "path": "../../packages/events" }, { "path": "../../packages/outbox-engine" }],
+  "include": ["src/**/*.ts"]
+}

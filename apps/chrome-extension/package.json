@@ -1,0 +1,25 @@
+{
+  "name": "@wai-bridge/chrome-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "dev": "node ./scripts/build.mjs --watch",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test": "pnpm test:unit && pnpm test:e2e",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@wai-bridge/shared": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/chrome": "0.1.32",
+    "@types/node": "26.6.5",
+    "esbuild": "0.28.2"
+  }
+}

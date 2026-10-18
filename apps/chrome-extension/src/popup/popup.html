@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WAI Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>WAI Bridge</h1>
+      <p id="connection" role="status">Local agent: unconfigured</p>
+      <p id="monitor-state">Monitoring: off</p>
+      <button id="toggle-monitor" type="button">Start monitoring</button>
+      <section aria-labelledby="activity-heading">
+        <h2 id="activity-heading">Recent activity</h2>
+        <ul id="activities"></ul>
+      </section>
+      <section aria-labelledby="error-heading">
+        <h2 id="error-heading">Errors</h2>
+        <ul id="errors"></ul>
+      </section>
+      <a href="options.html" target="_blank">Options</a>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

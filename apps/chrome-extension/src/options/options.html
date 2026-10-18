@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WAI Bridge options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>WAI Bridge options</h1>
+      <label><input id="retain-activities" type="checkbox" /> Keep local activity summaries</label>
+      <p>Summaries contain event labels and timestamps only. Message content is not saved in extension activity history.</p>
+      <p>Native Messaging uses the configured local host. Capture forwarding is not enabled in this phase.</p>
+      <p id="save-state" role="status"></p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

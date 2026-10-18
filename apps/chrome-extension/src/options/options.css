@@ -1,0 +1,4 @@
+:root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+body { max-width: 680px; margin: 40px auto; padding: 0 20px; }
+label { display: flex; gap: 10px; align-items: center; }
+p { line-height: 1.5; }

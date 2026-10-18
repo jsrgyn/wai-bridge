@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "WAI Bridge (simulator build)",
+  "version": "0.1.0",
+  "description": "Local capture bridge scaffold. Real WhatsApp DOM adapter is not configured.",
+  "action": {
+    "default_title": "WAI Bridge",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "permissions": ["activeTab", "storage", "nativeMessaging"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

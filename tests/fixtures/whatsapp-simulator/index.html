@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Synthetic conversation simulator</title></head>
+  <body>
+    <main>
+      <h1>Local synthetic simulator</h1>
+      <p id="unread-counter" aria-label="Unread messages">2</p>
+      <aside data-wai-conversation-list aria-label="Conversation list">
+        <div data-wai-conversation-row aria-label="Existing synthetic conversation" data-wai-conversation-type="INDIVIDUAL"></div>
+      </aside>
+      <section id="individual" data-wai-observation-root role="log" aria-label="Synthetic individual" data-wai-conversation-type="INDIVIDUAL">
+        <article role="article" data-wai-message data-wai-sender="Synthetic Contact" data-wai-direction="INBOUND">
+          <span data-wai-message-text>Existing message before monitoring</span>
+        </article>
+      </section>
+      <section id="group" data-wai-observation-root role="log" aria-label="Synthetic group" data-wai-conversation-type="GROUP">
+        <article role="article" data-wai-message data-wai-sender="Synthetic Member A" data-wai-direction="INBOUND">
+          <span data-wai-message-text>Existing group message before monitoring</span>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

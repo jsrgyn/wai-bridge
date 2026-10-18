@@ -1,0 +1,34 @@
+{
+  "name": "wai-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=24 <27",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "dev": "pnpm --recursive --if-present dev",
+    "build": "pnpm --recursive --if-present build",
+    "lint": "eslint .",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:extension:e2e": "pnpm --filter @wai-bridge/chrome-extension test:e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.5",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "vitest": "5.0.5"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "zod": "4.6.7"
+  }
+}

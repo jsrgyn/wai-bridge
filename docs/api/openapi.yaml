@@ -1,0 +1,374 @@
+openapi: 3.1.0
+info:
+  title: WAI Bridge Local API
+  version: 0.1.0
+  description: Local REST API. Production binds only to 127.0.0.1. All /api routes require the configured local bearer token.
+servers:
+  - url: http://127.0.0.1:47831
+security:
+  - LocalBearer: []
+paths:
+  /health:
+    get:
+      security: []
+      responses:
+        '200':
+          description: Process health, no personal data
+  /api/status:
+    get:
+      responses:
+        '200':
+          description: API/database status
+  /api/extension/state:
+    post:
+      summary: Record Native Messaging extension connectivity
+      security: [{ LocalBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [extensionInstanceId, status, lastSeenAt]
+              properties:
+                extensionInstanceId: { type: string, format: uuid }
+                status: { type: string, enum: [CONNECTED, DISCONNECTED] }
+                lastSeenAt: { type: string, format: date-time }
+      responses:
+        '204': { description: State persisted }
+        '400': { description: Invalid state payload }
+        '401': { description: Unauthorized }
+  /api/observations:
+    post:
+      summary: Persist one incremental UI observation and its event atomically
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CaptureSubmission' }
+      responses:
+        '202':
+          description: Observation persisted; duplicate returns the original event ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaptureResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/observations/{id}:
+    get:
+      summary: Retrieve a persisted observation without changing AI read state
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Full observation; may contain sensitive message text
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaptureObservation' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/contacts:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        {
+          '200': { description: Cursor-paginated contacts },
+          '400': { $ref: '#/components/responses/Error' },
+        }
+  /api/contacts/search:
+    get:
+      parameters:
+        - {
+            name: q,
+            in: query,
+            required: true,
+            schema: { type: string, minLength: 2, maxLength: 100 },
+          }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        {
+          '200': { description: Matching contacts },
+          '400': { $ref: '#/components/responses/Error' },
+        }
+  /api/conversations:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Cursor-paginated conversations } }
+  /api/conversations/{id}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        { '200': { description: Conversation }, '404': { $ref: '#/components/responses/Error' } }
+  /api/conversations/{id}/messages:
+    get:
+      parameters:
+        [
+          { $ref: '#/components/parameters/Id' },
+          { $ref: '#/components/parameters/Cursor' },
+          { $ref: '#/components/parameters/Limit' },
+        ]
+      responses: { '200': { description: Conversation messages; does not change AI read state } }
+  /api/messages:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: conversationId, in: query, schema: { $ref: '#/components/schemas/Id' } }
+        - { name: aiState, in: query, schema: { $ref: '#/components/schemas/AIMessageState' } }
+        - { name: consumerId, in: query, schema: { type: string, minLength: 1, maxLength: 128 } }
+        - { name: direction, in: query, schema: { $ref: '#/components/schemas/Direction' } }
+        - { name: captureStatus, in: query, schema: { $ref: '#/components/schemas/CaptureStatus' } }
+      responses: { '200': { description: Filtered recent messages; read-only } }
+  /api/messages/unread:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: AI UNREAD messages } }
+  /api/messages/recent:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Newest messages regardless of AI read status } }
+  /api/media/{id}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        {
+          '200': { description: Authorized media metadata; local storage path is never returned },
+          '404': { $ref: '#/components/responses/Error' },
+        }
+  /api/events:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Persisted event feed } }
+  /api/events/pending:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Events with pending broadcast delivery } }
+  /api/ai/claims:
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              {
+                type: object,
+                required: [messageId, consumerId],
+                properties:
+                  {
+                    messageId: { $ref: '#/components/schemas/Id' },
+                    consumerId: { type: string, minLength: 1, maxLength: 128 },
+                  },
+              }
+      responses:
+        {
+          '200': { description: Idempotent claim with claimToken },
+          '400': { $ref: '#/components/responses/Error' },
+          '409': { $ref: '#/components/responses/Error' },
+        }
+  /api/ai/ack:
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              {
+                type: object,
+                required: [messageId, consumerId, claimToken],
+                properties:
+                  {
+                    messageId: { $ref: '#/components/schemas/Id' },
+                    consumerId: { type: string },
+                    claimToken: { $ref: '#/components/schemas/Id' },
+                  },
+              }
+      responses:
+        {
+          '200': { description: Explicit ACK marks AI state READ },
+          '409': { $ref: '#/components/responses/Error' },
+        }
+  /api/ai/consumer-claims:
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [messageId, consumerId], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, leaseMs: { type: integer, minimum: 1000, maximum: 86400000, default: 60000 } } }
+      responses: { '200': { description: Consumer-specific lease, claim token, and persistent attempt count }, '409': { $ref: '#/components/responses/Error' } }
+  /api/ai/consumer-ack:
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [messageId, consumerId, claimToken], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, claimToken: { $ref: '#/components/schemas/Id' } } }
+      responses: { '200': { description: Explicit ACK marks this consumer state READ }, '409': { $ref: '#/components/responses/Error' } }
+  /api/ai/consumer-fail:
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [messageId, consumerId, claimToken, errorCode], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, claimToken: { $ref: '#/components/schemas/Id' }, errorCode: { type: string, pattern: '^[A-Z0-9_]{1,64}$' } } }
+      responses: { '200': { description: Failure is recorded and eligible for reprocessing }, '409': { $ref: '#/components/responses/Error' } }
+  /api/ai/consumers/{consumerId}/recoverable:
+    get:
+      parameters: [{ name: consumerId, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Unprocessed, failed, or expired-lease messages ordered by observedAt and id } }
+  /api/ai/messages/{messageId}/state:
+    get:
+      parameters: [{ name: messageId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }, { name: consumerId, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }]
+      responses: { '200': { description: Consumer-specific read state; GET is read-only } }
+  /api/outbox:
+    get:
+      parameters:
+        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Cursor-paginated commands } }
+    post:
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OutboxRequest' }
+      responses:
+        {
+          '202':
+            { description: Command persisted as REQUESTED; no send is executed by this API route },
+          '400': { $ref: '#/components/responses/Error' },
+          '404': { $ref: '#/components/responses/Error' },
+          '409': { $ref: '#/components/responses/Error' },
+        }
+  /api/outbox/{id}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        {
+          '200': { description: Command with status history },
+          '404': { $ref: '#/components/responses/Error' },
+        }
+  /api/outbox/{id}/cancel:
+    post:
+      parameters:
+        [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        {
+          '200': { description: Command cancelled if no send has started },
+          '404': { $ref: '#/components/responses/Error' },
+          '409': { $ref: '#/components/responses/Error' },
+        }
+  /api/outbox/{id}/result:
+    post:
+      parameters: [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [result], properties: { result: { type: string, enum: [SENT, UNKNOWN, FAILED] }, evidenceRef: { type: string, minLength: 1, maxLength: 512 } }, allOf: [{ if: { properties: { result: { const: SENT } } }, then: { required: [evidenceRef] } }] }
+      responses: { '200': { description: Manual outcome recorded from verified evidence }, '404': { $ref: '#/components/responses/Error' }, '409': { $ref: '#/components/responses/Error' } }
+components:
+  securitySchemes:
+    LocalBearer: { type: http, scheme: bearer }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 256 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+  schemas:
+    Id: { type: string, format: uuid }
+    CaptureObservation:
+      type: object
+      additionalProperties: false
+      required: [kind, observationId, observedAt, observationType, captureState, conversation, senderLabel, direction, content, contentAvailability, media]
+      properties:
+        kind: { type: string, const: CAPTURE_OBSERVATION }
+        observationId: { $ref: '#/components/schemas/Id' }
+        observedAt: { type: string, format: date-time, description: UTC timestamp ending in Z }
+        observationType: { type: string, enum: [MESSAGE, CONVERSATION_ACTIVITY] }
+        captureState: { $ref: '#/components/schemas/CaptureStatus' }
+        conversation:
+          type: object
+          additionalProperties: false
+          required: [label, kind]
+          properties:
+            label: { type: [string, 'null'], maxLength: 256 }
+            kind: { type: string, enum: [INDIVIDUAL, GROUP, UNKNOWN] }
+        senderLabel: { type: [string, 'null'], maxLength: 256 }
+        direction: { type: string, enum: [INBOUND, OUTBOUND, UNKNOWN] }
+        content: { type: [string, 'null'], maxLength: 10000 }
+        contentAvailability: { type: string, enum: [AVAILABLE, UNAVAILABLE] }
+        media:
+          type: array
+          maxItems: 16
+          items: { type: string, enum: [IMAGE, AUDIO, VIDEO, DOCUMENT, UNKNOWN] }
+    CaptureSubmission:
+      type: object
+      additionalProperties: false
+      required: [extensionInstanceId, observation]
+      properties:
+        extensionInstanceId: { $ref: '#/components/schemas/Id' }
+        observation: { $ref: '#/components/schemas/CaptureObservation' }
+    CaptureResult:
+      type: object
+      additionalProperties: false
+      required: [observationId, eventId, duplicate]
+      properties:
+        observationId: { $ref: '#/components/schemas/Id' }
+        eventId: { $ref: '#/components/schemas/Id' }
+        duplicate: { type: boolean }
+    Direction: { type: string, enum: [INBOUND, OUTBOUND] }
+    CaptureStatus: { type: string, enum: [DETECTED, CAPTURED, PENDING, FAILED] }
+    AIMessageState: { type: string, enum: [UNREAD, CLAIMED, READ, FAILED] }
+    OutboxRequest:
+      type: object
+      additionalProperties: false
+      required: [recipientId, text, explicitAuthorization]
+      properties:
+        recipientId: { $ref: '#/components/schemas/Id' }
+        text: { type: string, minLength: 1, maxLength: 10000 }
+        mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
+        explicitAuthorization: { type: boolean, const: true }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            correlationId: { type: string }
+  responses:
+    Error:
+      description: Structured API error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
