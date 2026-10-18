@@ -196,3 +196,48 @@ test('pending bubble is UNKNOWN and never clicked twice', async ({ page }) => {
     steps: ['WAITING_USER', 'SENDING', 'UNKNOWN'],
   });
 });
+
+for (const behavior of [
+  'false-after-insert',
+  'delayed-insert',
+  'no-insert',
+  'wrong-insert',
+] as const) {
+  test(`composition verifies rendered text when insert command is ${behavior}`, async ({
+    page,
+  }) => {
+    await setup(page, 'SUPERVISED');
+    await page.evaluate((behavior) => {
+      const original = document.execCommand.bind(document);
+      document.execCommand = (name, ui, value) => {
+        if (name !== 'insertText') return original(name, ui, value);
+        if (behavior === 'false-after-insert') {
+          original(name, ui, value);
+          return false;
+        }
+        if (behavior === 'delayed-insert') {
+          setTimeout(() => original(name, ui, value), 100);
+          return false;
+        }
+        if (behavior === 'wrong-insert') original(name, ui, 'Different synthetic draft');
+        return false;
+      };
+    }, behavior);
+    await start(page);
+    if (behavior === 'no-insert' || behavior === 'wrong-insert') {
+      const state = await result(page);
+      expect(state.steps).toContain('FAILED');
+      expect(state.clicks).toBe(0);
+      expect(state.steps).not.toContain('SENDING');
+      return;
+    }
+    await expect
+      .poll(() => page.evaluate(() => window.__state.steps.includes('WAITING_USER')))
+      .toBe(true);
+    expect(await page.evaluate(() => window.__state.clicks)).toBe(0);
+    await page.evaluate(() => window.__executor.cancel());
+    const state = await result(page);
+    expect(state.steps).toContain('CANCELLED');
+    expect(state.clicks).toBe(0);
+  });
+}

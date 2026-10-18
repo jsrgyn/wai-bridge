@@ -110,11 +110,18 @@ export class VisibleSendExecutor {
           .filter(Boolean),
       );
       composer.focus();
-      if (
-        !this.doc.execCommand('insertText', false, command.text) ||
-        messageText(composer) !== command.text.normalize('NFC')
-      )
-        throw new Error('COMPOSE_FAILED');
+      // Chromium/editor handlers may insert successfully while returning false.
+      // Observe the rendered editor instead of treating that boolean as evidence.
+      // Insert exactly once: never retry or replace a user's partial draft.
+      this.doc.execCommand('insertText', false, command.text);
+      const composeDeadline = Date.now() + 1000;
+      while (messageText(composer) !== command.text.normalize('NFC')) {
+        this.check(command, controller.signal);
+        if (!composer.isConnected || this.composer(this.validate(command)) !== composer)
+          throw new Error('COMPOSE_FAILED');
+        if (Date.now() >= composeDeadline) throw new Error('COMPOSE_FAILED');
+        await delay(50, controller.signal);
+      }
       this.validate(command);
       this.doc.body.append(box);
       emitFlow(this.logs, {

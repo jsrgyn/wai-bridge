@@ -188,3 +188,7 @@ com fila WAITING_USER é espera manual. Não há contatos/texto/tokens no diagn�
 Perfil do destinatário já aberto com telefone exato é reutilizado antes de buscar;
 continua verificando conta, rascunho e identidade. Não há redução dos cinco segundos
 de AUTO nem permissão para enviar ocultamente. Consultar status/outbox não envia.
+
+### Composição e COMPOSE_FAILED
+
+A extensão insere o texto uma única vez e confere o conteúdo renderizado por até um segundo; retorno booleano de insertText não comprova sucesso/falha do editor. Texto ausente ou divergente bloqueia antes de SENDING. Não há segunda inserção nem limpeza automática de rascunho. Após falha, confira o campo manualmente antes de novo pedido: pode existir texto preparado mesmo sem envio. Recarregue extensão e depois a aba para ativar novo build.
