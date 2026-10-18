@@ -15,3 +15,5 @@ export type { MediaRecord, MediaStatus, MediaKind } from './repositories/media.j
 export * from './schemas.js';
 export { ApiReadRepository } from './repositories/api-read.js';
 export { ExtensionSendRepository } from './repositories/extension-send.js';
+
+export {FlowLogRepository} from './repositories/flow-logs.js';

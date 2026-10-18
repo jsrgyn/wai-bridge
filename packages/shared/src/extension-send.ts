@@ -88,6 +88,7 @@ export const ExtensionSendPollSchema = z
 export const ExtensionSendCommandSchema = z
   .object({
     id: z.uuid(),
+    traceId:z.uuid().optional(),
     leaseToken: z.uuid(),
     contextId: z.uuid(),
     conversationId: z.uuid().optional(),
@@ -124,6 +125,7 @@ export const ExtensionSendProgressSchema = z
   .object({
     extensionInstanceId: z.uuid(),
     commandId: z.uuid(),
+    traceId:z.uuid().optional(),
     leaseToken: z.uuid(),
     contextId: z.uuid(),
     step: ExtensionSendStepSchema,

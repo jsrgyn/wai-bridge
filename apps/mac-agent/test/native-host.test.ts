@@ -163,3 +163,12 @@ it('answers send control frames while observation persistence is stalled',async(
  try{await vi.waitFor(()=>expect(decodeFrames(Buffer.concat(chunks))).toContainEqual(expect.objectContaining({id:pollId,type:'SEND_POLL_RESULT'})));}
  finally{release();input.end();await running;}
 });
+
+it('accepts only extension-scoped diagnostic events after HELLO and returns a log ACK',async()=>{
+ const input=new PassThrough();const output=new PassThrough();const chunks:Buffer[]=[];output.on('data',(chunk:Buffer)=>chunks.push(chunk));
+ const logs=vi.fn(async(events:unknown[])=>({accepted:events.length}));const api={recordExtensionState:vi.fn(),recordFlowLogs:logs} as unknown as LocalApiClient;
+ const id=randomUUID();const event={id:randomUUID(),traceId:randomUUID(),at:new Date().toISOString(),component:'EXTENSION_CONTENT',phase:'RECIPIENT_LOOKUP',level:'INFO',outcome:'STARTED',code:'STARTED'};
+ const run=runNativeHost({input,output,stderr:new PassThrough(),callerOrigin:`chrome-extension://${extensionId}`,config,api});
+ input.end(Buffer.concat([frame({version:1,id:randomUUID(),type:'HELLO',extensionInstanceId}),frame({version:1,id,type:'FLOW_LOGS',extensionInstanceId,events:[event]}),frame({version:1,id:randomUUID(),type:'FLOW_LOGS',extensionInstanceId,events:[{...event,component:'SQLITE'}]})]));await run;
+ const replies=decodeFrames(Buffer.concat(chunks));expect(replies).toContainEqual({version:1,id,type:'FLOW_LOGS_RESULT',accepted:1});expect(logs).toHaveBeenCalledTimes(1);expect(replies).toContainEqual(expect.objectContaining({type:'ERROR',code:'INVALID_REQUEST'}));
+});

@@ -54,3 +54,7 @@ Estes requisitos descrevem comportamento desejado e não afirmam implementação
   Durante espera, acompanhar cancelamento pelo MCP e não repetir após ACK incerto.
   Expor diagnóstico de ponte/versão/fila sem conteúdo pessoal; falha de uma aba ou
   captura lenta não deve travar a supervisão indefinidamente.
+
+## FR-17 — trilha operacional correlacionada
+
+Registrar etapas de captura/consulta/envio entre MCP, API, native host, extensão, interface acessível e SQLite com traceId e recurso. Permitir consulta autenticada por trace/comando/observação e filtros de camada/nível, sem conteúdo privado. Diagnóstico best effort, limitado e separado da auditoria e do controle de envio; falha de log nunca implica repetição. Escopo/limites em ADR0016 e docs/operations/flow-logging.md.

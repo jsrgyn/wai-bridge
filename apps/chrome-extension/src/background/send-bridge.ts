@@ -1,3 +1,4 @@
+import { emitFlow, flowCode, type FlowLogSink } from '@wai-bridge/shared';
 import { extensionBuild } from '../build-info.js';
 import { z } from 'zod';
 import {
@@ -40,12 +41,15 @@ export class ExtensionSendBridge {
   private active: Active | undefined;
   private readonly completed = new Map<string, Active>();
   private polling = false;
+  private readonly sessionTrace = crypto.randomUUID();
+  private lastReason: string | undefined;
   constructor(
     private readonly instanceId: () => Promise<string>,
     private readonly tabs: Pick<typeof chrome.tabs, 'query' | 'sendMessage'> &
       Partial<Pick<typeof chrome.tabs, 'update'>>,
     private readonly storage: Pick<typeof chrome.storage.local, 'get'>,
     private readonly windows?: Pick<typeof chrome.windows, 'update'>,
+    private readonly logs?: FlowLogSink,
   ) {}
   connect(port: Port): void {
     this.port = port;
@@ -85,7 +89,20 @@ export class ExtensionSendBridge {
     if (this.completed.size > 32) this.completed.delete(this.completed.keys().next().value!);
     if (this.active === active) this.active = undefined;
   }
+  private logReason(reason: string): void {
+    if (this.lastReason === reason) return;
+    this.lastReason = reason;
+    emitFlow(this.logs, {
+      traceId: this.sessionTrace,
+      component: 'EXTENSION_BACKGROUND',
+      phase: 'BRIDGE_STATE',
+      outcome: reason === 'READY' ? 'SUCCEEDED' : 'WAITING',
+      code: flowCode(reason),
+      build: extensionBuild,
+    });
+  }
   private async report(reason: z.infer<typeof SendBridgeReasonSchema>): Promise<void> {
+    this.logReason(reason);
     await this.rpc('SEND_POLL', {
       extensionInstanceId: await this.instanceId(),
       allowClaim: false,
@@ -172,6 +189,7 @@ export class ExtensionSendBridge {
           continue;
         }
         if (!context.identity) continue;
+        this.logReason(!enabled ? 'SEND_DISABLED' : context.ready ? 'READY' : 'TAB_HIDDEN');
         const result = ExtensionSendPollResultSchema.parse(
           await this.rpc('SEND_POLL', {
             extensionInstanceId: instance,
@@ -239,10 +257,29 @@ export class ExtensionSendBridge {
       if (!result.command) return;
       const command = ExtensionSendCommandSchema.parse(result.command);
       this.active = { tabId: tab.id!, command, identity: fresh.identity };
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'EXTENSION_BACKGROUND',
+        phase: 'SEND_CLAIMED',
+        outcome: 'SUCCEEDED',
+        code: 'OK',
+        build: extensionBuild,
+      });
       // Content replies on acceptance; progress/cancellation use the durable separate channel.
       const acknowledgement = await bounded(
         this.tabs.sendMessage(tab.id!, { kind: 'SEND_EXECUTE', command }),
       );
+      if (acknowledgement?.accepted)
+        emitFlow(this.logs, {
+          traceId: command.traceId ?? command.id,
+          resourceId: command.id,
+          component: 'EXTENSION_BACKGROUND',
+          phase: 'SEND_ACCEPTED',
+          outcome: 'SUCCEEDED',
+          code: 'ACCEPTED',
+          build: extensionBuild,
+        });
       if (acknowledgement?.ok === false) {
         await this.progress(
           {
@@ -256,7 +293,17 @@ export class ExtensionSendBridge {
           tab.id!,
         );
       }
-    } catch {
+    } catch (error) {
+      if (this.active)
+        emitFlow(this.logs, {
+          traceId: this.active.command.traceId ?? this.active.command.id,
+          resourceId: this.active.command.id,
+          component: 'EXTENSION_BACKGROUND',
+          phase: 'FAILED',
+          outcome: 'UNKNOWN',
+          code: flowCode(error),
+          build: extensionBuild,
+        });
       // A failed/lost acceptance ACK must never cause a second execution attempt.
       // A stalled UI request times out; active jobs remain under backend lease recovery.
       if (!this.active && this.port)

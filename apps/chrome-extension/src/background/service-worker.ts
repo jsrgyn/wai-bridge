@@ -1,3 +1,5 @@
+import {FlowLogPublisher} from './flow-log-publisher.js';
+import {FlowLogSchema,emitFlow,flowCode,type FlowLogSink} from '@wai-bridge/shared';
 import { ExtensionSendBridge } from './send-bridge.js';
 import { ExtensionStateSchema, IdentityControlSchema, type ExtensionState } from '../contracts.js';
 import { z } from 'zod';
@@ -8,7 +10,9 @@ import { activeMonitorStatus } from './monitor-status.js';
 
 const extensionInstanceIdKey = 'waiBridgeExtensionInstanceId';
 const publisher = new EventPublisher(chrome.storage.local);
-const sendBridge=new ExtensionSendBridge(getExtensionInstanceId,chrome.tabs,chrome.storage.local,chrome.windows);
+const flowPublisher=new FlowLogPublisher(chrome.storage.local);
+const flowSink:FlowLogSink=event=>{void flowPublisher.enqueue(event).catch(()=>console.warn('WAI_FLOW_LOG_QUEUE_UNAVAILABLE'));};
+const sendBridge=new ExtensionSendBridge(getExtensionInstanceId,chrome.tabs,chrome.storage.local,chrome.windows,flowSink);
 let nativePort: chrome.runtime.Port | undefined;
 let reconnectDelay = 1_000;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,11 +80,12 @@ async function connectNative(): Promise<void> {
         void updateConnection('DISCONNECTED');
         return;
       }
+      if(flowPublisher.receive(parsed.data))return;
       if(sendBridge.receive(parsed.data))return;
       if (parsed.data.type === 'HOST_STATE') {
         reconnectDelay = 1_000;
         void updateConnection(parsed.data.connected ? 'CONNECTED' : 'DISCONNECTED');
-        if (parsed.data.connected) {void publisher.connect(port, extensionInstanceId);void sendBridge.poll();}
+        if (parsed.data.connected) {flowPublisher.connect(port,extensionInstanceId);void publisher.connect(port, extensionInstanceId);void sendBridge.poll();}
       }
       if (parsed.data.type === 'CAPTURE_RESULT') void publisher.acknowledge(parsed.data.observationId, parsed.data.eventId);
       if (parsed.data.type === 'ERROR') {
@@ -91,6 +96,7 @@ async function connectNative(): Promise<void> {
     port.onDisconnect.addListener(() => {
       nativePort = undefined;
       publisher.disconnect();
+      flowPublisher.disconnect();
       sendBridge.disconnect();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
@@ -127,6 +133,11 @@ chrome.tabs.onUpdated?.addListener((_tabId,change)=>{if(change.status==='complet
 chrome.windows?.onFocusChanged?.addListener(()=>void sendBridge.poll());
 chrome.storage.onChanged?.addListener((changes,area)=>{if(area==='local' && ('waiExtensionSendsEnabled' in changes || 'waiMonitoringIntent' in changes))void sendBridge.poll();});
 chrome.runtime.onMessage.addListener((raw, sender, respond) => {
+  if(raw?.kind==='FLOW_LOG'){
+    const event=FlowLogSchema.safeParse(raw.event);
+    if(sender.id!==chrome.runtime.id || sender.origin!=='https://web.whatsapp.com' || sender.tab?.id===undefined || !event.success || !['EXTENSION_CONTENT','WHATSAPP_UI'].includes(event.data.component)){respond({ok:false});return;}
+    void flowPublisher.enqueue(event.data).then(()=>respond({ok:true})).catch(()=>respond({ok:false}));return true;
+  }
   if(raw?.kind==='SEND_WAKE'){
     if(sender.id===chrome.runtime.id && sender.origin==='https://web.whatsapp.com' && sender.tab?.id!==undefined)void sendBridge.poll();
     respond({ok:true});return;
@@ -191,6 +202,7 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
     void (async () => {
       try {
         await publisher.enqueue(observation.data);
+        emitFlow(flowSink,{traceId:observation.data.observationId,resourceId:observation.data.observationId,component:'EXTENSION_BACKGROUND',phase:'CAPTURE_QUEUED',outcome:'SUCCEEDED',code:'QUEUED'});
         const current = await getState();
         const next = {
           ...current,
@@ -203,7 +215,8 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
         };
         await saveState(next);
         respond({ ok: true });
-      } catch {
+      } catch (error) {
+        emitFlow(flowSink,{traceId:observation.data.observationId,resourceId:observation.data.observationId,component:'EXTENSION_BACKGROUND',phase:'CAPTURE_QUEUED',outcome:'FAILED',code:flowCode(error)});
         const updated = withError(await getState(), 'Capture queue could not persist an observation.');
         await saveState(updated);
         respond({ ok: false, error: 'CAPTURE_QUEUE_UNAVAILABLE' });

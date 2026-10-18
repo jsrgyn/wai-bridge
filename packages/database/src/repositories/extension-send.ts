@@ -1,3 +1,5 @@
+import { FlowLogRepository } from './flow-logs.js';
+import { flowCode } from '@wai-bridge/shared';
 import { ConversationIdentityRepository } from './conversation-identities.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -35,7 +37,7 @@ export class ExtensionSendRepository {
   ) {
     this.outbox = new OutboxRepository(db);
   }
-  create(raw: unknown, idempotencyKey: string) {
+  create(raw: unknown, idempotencyKey: string, traceId?: string) {
     const request = ExtensionSendRequestSchema.parse(raw);
     const key = z.string().min(16).max(128).parse(idempotencyKey);
     return this.db
@@ -76,11 +78,11 @@ export class ExtensionSendRepository {
           createdAt: this.now(),
         });
         if (result.inserted) this.audit(result.id, 'CREATED');
-        return { ...result, status: this.outbox.get(result.id)!.status };
+        return this.registerTrace(result, traceId);
       })
       .immediate();
   }
-  createToName(raw: unknown, idempotencyKey: string) {
+  createToName(raw: unknown, idempotencyKey: string, traceId?: string) {
     const request = ExtensionRecipientSendRequestSchema.parse(raw);
     const key = z.string().min(16).max(128).parse(idempotencyKey);
     return this.db
@@ -96,7 +98,7 @@ export class ExtensionSendRepository {
             JSON.stringify(request)
           )
             throw new Error('IDEMPOTENCY_CONFLICT');
-          return { id: existing.id, inserted: false, status: this.outbox.get(existing.id)!.status };
+          return this.registerTrace({ id: existing.id, inserted: false }, traceId);
         }
         const accountId = this.activeAccount(request.accountId);
         const normalize = (value: string) =>
@@ -134,6 +136,7 @@ export class ExtensionSendRepository {
           { ...body, accountId, phoneNumber: [...phones][0]! },
           key,
           request,
+          traceId,
         );
       })
       .immediate();
@@ -142,6 +145,7 @@ export class ExtensionSendRepository {
     raw: unknown,
     idempotencyKey: string,
     nameRequest?: z.infer<typeof ExtensionRecipientSendRequestSchema>,
+    traceId?: string,
   ) {
     const parsed = ExtensionPhoneSendRequestSchema.parse(raw);
     const request = { ...parsed, phoneNumber: normalizeProfilePhone(parsed.phoneNumber)! };
@@ -160,7 +164,7 @@ export class ExtensionSendRepository {
             JSON.stringify(prior.nameRequest) !== JSON.stringify(nameRequest)
           )
             throw new Error('IDEMPOTENCY_CONFLICT');
-          return { id: existing.id, inserted: false, status: this.outbox.get(existing.id)!.status };
+          return this.registerTrace({ id: existing.id, inserted: false }, traceId);
         }
         const accountId = this.activeAccount(parsed.accountId);
         const payload = Payload.parse({
@@ -187,7 +191,7 @@ export class ExtensionSendRepository {
           createdAt: this.now(),
         });
         if (result.inserted) this.audit(result.id, 'CREATED');
-        return { ...result, status: this.outbox.get(result.id)!.status };
+        return this.registerTrace(result, traceId);
       })
       .immediate();
   }
@@ -231,6 +235,15 @@ export class ExtensionSendRepository {
         'EXTENSION_LEASE_EXPIRED',
         { leaseOwner: null, leaseUntil: null, resultCode: 'EXTENSION_LEASE_EXPIRED' },
       );
+      new FlowLogRepository(this.db).record({
+        traceId: this.traceFor(id),
+        resourceId: id,
+        component: 'SQLITE',
+        phase: item.status === 'SENDING' ? 'UNKNOWN' : 'FAILED',
+        outcome: item.status === 'SENDING' ? 'UNKNOWN' : 'FAILED',
+        level: 'ERROR',
+        code: 'EXTENSION_LEASE_EXPIRED',
+      });
     }
     const cutoff = new Date(Date.parse(at) - 300_000).toISOString();
     const stale = this.db
@@ -238,7 +251,7 @@ export class ExtensionSendRepository {
         "SELECT id FROM wa_outbox WHERE kind='extension-send' AND status='REQUESTED' AND created_at<?",
       )
       .all(cutoff) as { id: string }[];
-    for (const { id } of stale)
+    for (const { id } of stale) {
       this.outbox.transition(
         id,
         'REQUESTED',
@@ -248,6 +261,16 @@ export class ExtensionSendRepository {
         'REQUEST_EXPIRED',
         { resultCode: 'REQUEST_EXPIRED' },
       );
+      new FlowLogRepository(this.db).record({
+        traceId: this.traceFor(id),
+        resourceId: id,
+        component: 'SQLITE',
+        phase: 'FAILED',
+        outcome: 'FAILED',
+        level: 'ERROR',
+        code: 'REQUEST_EXPIRED',
+      });
+    }
   }
   poll(raw: unknown) {
     const input = ExtensionSendPollSchema.parse(raw);
@@ -327,9 +350,18 @@ export class ExtensionSendRepository {
           .prepare('UPDATE wa_outbox SET attempt_count=attempt_count+1 WHERE id=?')
           .run(item.id);
         const payload = Payload.parse(item.payload);
+        new FlowLogRepository(this.db).record({
+          traceId: this.traceFor(item.id),
+          resourceId: item.id,
+          component: 'SQLITE',
+          phase: 'SEND_CLAIMED',
+          outcome: 'SUCCEEDED',
+          code: 'OK',
+        });
         return {
           command: ExtensionSendCommandSchema.parse({
             id: item.id,
+            traceId: this.traceFor(item.id),
             leaseToken: token,
             contextId: input.identity.contextId,
             conversationId: payload.conversationId,
@@ -424,6 +456,25 @@ export class ExtensionSendRepository {
           input.code,
           fields,
         );
+        new FlowLogRepository(this.db).record({
+          traceId: this.traceFor(item.id),
+          resourceId: item.id,
+          component: 'SQLITE',
+          phase: input.step,
+          outcome:
+            input.step === 'FAILED'
+              ? 'FAILED'
+              : input.step === 'UNKNOWN'
+                ? 'UNKNOWN'
+                : input.step === 'CANCELLED'
+                  ? 'CANCELLED'
+                  : input.step === 'SENDING'
+                    ? 'STARTED'
+                    : input.step === 'SENT'
+                      ? 'SUCCEEDED'
+                      : 'WAITING',
+          code: flowCode(input.code),
+        });
         if (terminal.includes(input.step)) this.outbox.releaseInterfaceLease(owner, item.id);
         return { ok: true as const, status: input.step };
       })
@@ -446,6 +497,14 @@ export class ExtensionSendRepository {
           'USER_CANCELLED',
           { resultCode: 'USER_CANCELLED' },
         );
+        new FlowLogRepository(this.db).record({
+          traceId: this.traceFor(id),
+          resourceId: id,
+          component: 'SQLITE',
+          phase: 'CANCELLED',
+          outcome: 'CANCELLED',
+          code: 'USER_CANCELLED',
+        });
         if (item.leaseOwner) this.outbox.releaseInterfaceLease(item.leaseOwner, id);
         return result;
       })
@@ -498,6 +557,27 @@ export class ExtensionSendRepository {
       ),
       queue,
     };
+  }
+  traceFor(id: string): string {
+    const row = this.db.prepare('SELECT flow_trace_id FROM wa_outbox WHERE id=?').get(id) as
+      { flow_trace_id: string | null } | undefined;
+    return row?.flow_trace_id ?? id;
+  }
+  private registerTrace(result: { id: string; inserted: boolean }, traceId?: string) {
+    const trace = traceId ? z.uuid().parse(traceId) : result.id;
+    this.db
+      .prepare('UPDATE wa_outbox SET flow_trace_id=COALESCE(flow_trace_id,?) WHERE id=?')
+      .run(trace, result.id);
+    const canonical = this.traceFor(result.id);
+    new FlowLogRepository(this.db).record({
+      traceId: canonical,
+      resourceId: result.id,
+      component: 'SQLITE',
+      phase: 'SEND_REQUESTED',
+      outcome: 'SUCCEEDED',
+      code: result.inserted ? 'COMMITTED' : 'REPLAY',
+    });
+    return { ...result, traceId: canonical, status: this.outbox.get(result.id)!.status };
   }
   private audit(id: string, code: string) {
     this.db

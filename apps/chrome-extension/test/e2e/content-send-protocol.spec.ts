@@ -12,6 +12,7 @@ declare global {
       replies: Reply[];
       listener: (message: unknown, sender: unknown, reply: (value: Reply) => void) => unknown;
       clicks: number;
+      logs: { phase: string; traceId: string; resourceId?: string }[];
     };
   }
 }
@@ -26,7 +27,7 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
   );
   await page.goto('https://protocol.test/');
   await page.evaluate(() => {
-    window.protocolCase = { steps: [], replies: [], listener: () => {}, clicks: 0 };
+    window.protocolCase = { steps: [], replies: [], listener: () => {}, clicks: 0, logs: [] };
     (window as unknown as { chrome: unknown }).chrome = {
       runtime: {
         id: 'abcdefghijklmnopabcdefghijklmnop',
@@ -35,13 +36,18 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
             window.protocolCase.listener = listener;
           },
         },
-        sendMessage: async (raw: { kind: string; input?: { step: string } }) => {
+        sendMessage: async (raw: {
+          kind: string;
+          input?: { step: string };
+          event?: { phase: string; traceId: string; resourceId?: string };
+        }) => {
           if (raw.kind === 'GET_MONITOR_BOOT')
             return {
               ok: true,
               monitoring: true,
               accountId: '11111111-1111-4111-8111-111111111111',
             };
+          if (raw.kind === 'FLOW_LOG' && raw.event) window.protocolCase.logs.push(raw.event);
           if (raw.kind === 'SEND_PROGRESS') window.protocolCase.steps.push(raw.input!.step);
           return { ok: true };
         },
@@ -112,4 +118,12 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
     .poll(() => page.evaluate(() => window.protocolCase.steps))
     .toEqual(['WAITING_USER', 'CANCELLED']);
   expect(await page.evaluate(() => window.protocolCase.clicks)).toBe(0);
+  const logs = await page.evaluate(() => window.protocolCase.logs);
+  expect(logs).toContainEqual(
+    expect.objectContaining({ resourceId: id, traceId: id, phase: 'CANCELLED' }),
+  );
+  expect(logs).toContainEqual(
+    expect.objectContaining({ resourceId: id, phase: 'MESSAGE_COMPOSED' }),
+  );
+  expect(JSON.stringify(logs)).not.toContain('Synthetic supervised draft');
 });

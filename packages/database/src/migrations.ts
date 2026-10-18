@@ -26,6 +26,7 @@ export const migrations: readonly Migration[] = [
   loadMigration(8, 'conversation-identities', '008-conversation-identities.sql'),
   loadMigration(9, 'automatic-ui-context', '009-automatic-ui-context.sql'),
   loadMigration(10, 'contact-phone', '010-contact-phone.sql'),
+  loadMigration(11, 'flow-logs', '011-flow-logs.sql'),
 ];
 
 export function applyMigrations(

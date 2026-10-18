@@ -102,3 +102,7 @@ retornar pending=true; activeCommand autenticado retorna activeStatus sem claim.
 Conta/opt-in são registrados em escopo por extensão+conta; diagnóstico por instância
 fica em extension-send-health. Várias contas na mesma extensão não escolhem a última.
 Cancelamento continua pela rota anterior; supervisão transmite término para a aba.
+
+## Logs de fluxo
+
+GET/POST `/api/diagnostics/logs`, autenticados pelo Bearer local. POST aceita FlowLogBatchSchema estrito (1–50 eventos) e retorna 202 `{accepted, inserted}`; GET usa FlowLogQuerySchema (traceId/resourceId UUID, component, level, beforeSequence, limit até100). Header opcional `x-wai-trace-id` UUID correlaciona solicitações; resposta devolve o trace. Consulte [guia de diagnóstico](../operations/flow-logging.md).

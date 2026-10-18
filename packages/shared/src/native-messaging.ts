@@ -1,3 +1,4 @@
+import {FlowLogBatchSchema} from './flow-log.js';
 import { z } from 'zod';
 import { ExtensionSendPollSchema, ExtensionSendProgressSchema, ExtensionSendPollResultSchema, ExtensionSendProgressResultSchema } from './extension-send.js';
 import { ConversationIdentitySchema } from './conversation-identity.js';
@@ -44,12 +45,14 @@ export const NativeRequestSchema = z.discriminatedUnion('type', [
   RequestBase.extend({ type: z.literal('HELLO'), extensionInstanceId: z.string().uuid() }),
   RequestBase.extend({ type: z.literal('HEARTBEAT'), extensionInstanceId: z.string().uuid() }),
   RequestBase.extend({ type: z.literal('STATUS_REQUEST') }),
+  RequestBase.extend({type:z.literal('FLOW_LOGS'),extensionInstanceId:z.uuid(),events:FlowLogBatchSchema.shape.events}),
   RequestBase.extend({ type:z.literal('SEND_POLL'), input:ExtensionSendPollSchema }),
   RequestBase.extend({ type:z.literal('SEND_PROGRESS'), input:ExtensionSendProgressSchema }),
   RequestBase.extend({ type: z.literal('CAPTURE_OBSERVATION'), extensionInstanceId: z.string().uuid(), observation: CaptureObservationSchema }),
 ]);
 
 export const NativeResponseSchema = z.discriminatedUnion('type', [
+  RequestBase.extend({type:z.literal('FLOW_LOGS_RESULT'),accepted:z.number().int().min(0).max(50)}),
   RequestBase.extend({type:z.literal('SEND_POLL_RESULT'), result:ExtensionSendPollResultSchema}),
   RequestBase.extend({type:z.literal('SEND_PROGRESS_RESULT'), result:ExtensionSendProgressResultSchema}),
   RequestBase.extend({ type: z.literal('HOST_STATE'), connected: z.boolean(), hostInstanceId: z.string().uuid(), at: UtcTimestampSchema }),

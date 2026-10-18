@@ -1,3 +1,4 @@
+import { emitFlow, flowCode, type FlowLogSink } from '@wai-bridge/shared';
 import {
   ExtensionSendCommandSchema,
   sendTarget,
@@ -23,8 +24,11 @@ export class VisibleSendExecutor {
     private readonly identity: { current(): ConversationIdentity | undefined },
     private readonly progress: (command: ExtensionSendCommand, step: Step) => Promise<void>,
     private readonly doc: Document = document,
+    private readonly logs?: FlowLogSink,
   ) {}
-  cancel(): void { this.active?.abort(); }
+  cancel(): void {
+    this.active?.abort();
+  }
   setEnabled(value: boolean): void {
     this.enabled = value;
     if (!value) this.active?.abort();
@@ -48,6 +52,15 @@ export class VisibleSendExecutor {
     cancel.addEventListener('click', () => controller.abort());
     box.append(label, cancel);
     try {
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'EXTENSION_CONTENT',
+        phase: 'SEND_ACCEPTED',
+        outcome: 'STARTED',
+        code: 'ACCEPTED',
+        mode: command.mode,
+      });
       if (this.doc.hidden) {
         label.textContent =
           'WAI Bridge: abra a aba do WhatsApp para preparar a mensagem. Nenhum envio iniciado.';
@@ -59,6 +72,14 @@ export class VisibleSendExecutor {
         }
       }
       if (command.locateByPhone) {
+        emitFlow(this.logs, {
+          traceId: command.traceId ?? command.id,
+          resourceId: command.id,
+          component: 'WHATSAPP_UI',
+          phase: 'RECIPIENT_LOOKUP',
+          outcome: 'STARTED',
+          code: 'STARTED',
+        });
         label.textContent = 'WAI Bridge: pesquisando e conferindo o telefone do contato.';
         this.doc.body.append(box);
         search = new PhoneSearch(this.doc, this.identity);
@@ -70,6 +91,14 @@ export class VisibleSendExecutor {
         );
       }
       const root = this.validate(command);
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'WHATSAPP_UI',
+        phase: 'RECIPIENT_VERIFIED',
+        outcome: 'SUCCEEDED',
+        code: 'OK',
+      });
       const composer = this.composer(root);
       if (messageText(composer)) throw new Error('COMPOSER_HAS_DRAFT');
       const baseline = new Set(
@@ -88,6 +117,14 @@ export class VisibleSendExecutor {
         throw new Error('COMPOSE_FAILED');
       this.validate(command);
       this.doc.body.append(box);
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'WHATSAPP_UI',
+        phase: 'MESSAGE_COMPOSED',
+        outcome: 'SUCCEEDED',
+        code: 'OK',
+      });
       if (command.mode === 'AUTO') {
         await this.progress(command, {
           step: 'WAITING_AUTO_SEND',
@@ -133,6 +170,14 @@ export class VisibleSendExecutor {
       label.textContent = 'WAI Bridge: aguardando confirmação visível do envio.';
       cancel.disabled = true;
       buttons[0]!.click();
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'WHATSAPP_UI',
+        phase: 'SENDING',
+        outcome: 'STARTED',
+        code: 'SEND_CLICK_AUTHORIZED',
+      });
       const result = await this.verify(root, command, baseline, baselineKeys, controller.signal);
       await this.reportTerminal(command, result);
     } catch (error) {
@@ -330,6 +375,21 @@ export class VisibleSendExecutor {
     return { step: 'UNKNOWN', code: 'SEND_CONFIRMATION_TIMEOUT' };
   }
   private async reportTerminal(command: ExtensionSendCommand, result: Step): Promise<void> {
+    emitFlow(this.logs, {
+      traceId: command.traceId ?? command.id,
+      resourceId: command.id,
+      component: 'WHATSAPP_UI',
+      phase: result.step,
+      outcome:
+        result.step === 'FAILED'
+          ? 'FAILED'
+          : result.step === 'UNKNOWN'
+            ? 'UNKNOWN'
+            : result.step === 'CANCELLED'
+              ? 'CANCELLED'
+              : 'SUCCEEDED',
+      code: flowCode(result.code),
+    });
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await this.progress(command, result);

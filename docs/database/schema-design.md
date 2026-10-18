@@ -27,3 +27,7 @@ Retenção numérica por classe de dado, política de eliminação, estratégia 
 ## Mídia (migration 004)
 
 `wa_media` mantém o vínculo obrigatório com `wa_messages`. A migration 004 adiciona `processing_status` (`DETECTED`, `AVAILABLE`, `CACHING`, `CACHED`, `UNAVAILABLE`, `FAILED`, `REMOVED`), `duration_ms`, `caching_started_at`, `cached_at`, `verified_at`, `removed_at` e `error_code`, com índices para retenção e deduplicação por hash/chave. A coluna legada `availability` continua para compatibilidade de leitura da API; o estado detalhado é `processing_status`. `storage_key` é relativo e gerado pelo servidor. Bytes nunca são gravados no SQLite. Transições de status usam transação e `wa_audit_log` sem conteúdo de mídia.
+
+## Schema11 — logs operacionais
+
+`wa_flow_logs`: sequence incremental, id único, trace_id, resource_id opcional, component, level, received_at e event_json validado pelo contrato compartilhado. Índices por trace, recurso, componente e recebimento. `wa_outbox.flow_trace_id` preserva correlação fora do payload/idempotency hash; registros antigos usam o ID do comando. Logs têm retenção independente de sete dias/20 mil linhas e não substituem auditoria/estado. Apenas a API escreve/lê SQLite. ADR0016.

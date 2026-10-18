@@ -5,7 +5,7 @@ import { InMemoryTransport as ServerMemoryTransport } from '@modelcontextprotoco
 import { Client } from '@modelcontextprotocol/client';
 
 const TOKEN = 'test-token-at-least-thirty-two-characters';
-const names = ['whatsapp_status','whatsapp_search_contacts','whatsapp_list_conversations','whatsapp_list_groups','whatsapp_get_conversation','whatsapp_get_messages','whatsapp_get_dialogue','whatsapp_get_unread','whatsapp_get_recent','whatsapp_get_media','whatsapp_get_pending_tasks','whatsapp_prepare_message','whatsapp_request_send','whatsapp_get_outbox_status','whatsapp_cancel_send','whatsapp_send_message','whatsapp_send_to_number','whatsapp_send_to_contact','whatsapp_cancel_extension_send'];
+const names = ['whatsapp_status','whatsapp_get_flow_logs','whatsapp_search_contacts','whatsapp_list_conversations','whatsapp_list_groups','whatsapp_get_conversation','whatsapp_get_messages','whatsapp_get_dialogue','whatsapp_get_unread','whatsapp_get_recent','whatsapp_get_media','whatsapp_get_pending_tasks','whatsapp_prepare_message','whatsapp_request_send','whatsapp_get_outbox_status','whatsapp_cancel_send','whatsapp_send_message','whatsapp_send_to_number','whatsapp_send_to_contact','whatsapp_cancel_extension_send'];
 const closeFns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of closeFns.splice(0)) await close(); vi.restoreAllMocks(); });
 

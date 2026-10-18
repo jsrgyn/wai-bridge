@@ -1,3 +1,4 @@
+import { emitFlow, type FlowLogSink } from '@wai-bridge/shared';
 import { extensionBuild } from '../build-info.js';
 import { ContentRuntimeClient } from '../messaging/content-runtime.js';
 import { z } from 'zod';
@@ -34,6 +35,10 @@ const runtimeClient = new ContentRuntimeClient(
   },
 );
 
+const flowSink: FlowLogSink = (event) => {
+  console.debug('WAI_FLOW', event);
+  runtimeClient.notify({ kind: 'FLOW_LOG', event });
+};
 const senderExecutor = new VisibleSendExecutor(
   { current: currentIdentity },
   async (command, step) => {
@@ -41,6 +46,7 @@ const senderExecutor = new VisibleSendExecutor(
       kind: 'SEND_PROGRESS',
       input: {
         commandId: command.id,
+        traceId: command.traceId ?? command.id,
         contextId: command.contextId,
         leaseToken: command.leaseToken,
         ...step,
@@ -49,6 +55,8 @@ const senderExecutor = new VisibleSendExecutor(
     if (!z.object({ ok: z.literal(true) }).safeParse(reply).success)
       throw new Error('PROGRESS_UNAVAILABLE');
   },
+  document,
+  flowSink,
 );
 let observer: MonitorObserver | undefined;
 let monitoring = false;
@@ -61,6 +69,17 @@ function reportError(message: string): void {
 
 function publishObservation(observation: CaptureObservation, attempt = 0): void {
   if (!runtimeClient.isValid()) return;
+  if (attempt === 0)
+    emitFlow(flowSink, {
+      traceId: observation.observationId,
+      resourceId: observation.observationId,
+      component: 'WHATSAPP_UI',
+      phase: 'CAPTURE_OBSERVED',
+      outcome: 'SUCCEEDED',
+      code: 'OK',
+      direction: observation.direction,
+      build: extensionBuild,
+    });
   const retry = () => {
     if (attempt >= 5 || !runtimeClient.isValid()) return;
     const timer = setTimeout(

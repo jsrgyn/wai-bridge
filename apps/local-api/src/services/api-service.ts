@@ -1,3 +1,4 @@
+import {FlowLogRepository} from '@wai-bridge/database';
 import { ExtensionSendRepository } from '@wai-bridge/database';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -111,7 +112,9 @@ export class ApiService {
         }
         return { observationId: input.observation.observationId, ...result };
       });
-      return tx.immediate();
+      const committed=tx.immediate();
+      new FlowLogRepository(this.db).record({traceId:input.observation.observationId,resourceId:input.observation.observationId,component:'SQLITE',phase:'CAPTURE_COMMITTED',outcome:'SUCCEEDED',code:committed.duplicate?'REPLAY':'COMMITTED'});
+      return committed;
     } catch (error) {
       if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') throw conflict('IDEMPOTENCY_CONFLICT', 'Observation ID has different content');
       throw error;
@@ -249,9 +252,9 @@ export class ApiService {
       throw error;
     }
   }
-  createExtensionRecipientSend(input:unknown,key:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToName(input,key));}
-  createExtensionPhoneSend(input:unknown,key:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToNumber(input,key));}
-  createExtensionSend(input: unknown, key: string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).create(input,key)); }
+  createExtensionRecipientSend(input:unknown,key:string,traceId?:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToName(input,key,traceId));}
+  createExtensionPhoneSend(input:unknown,key:string,traceId?:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToNumber(input,key,undefined,traceId));}
+  createExtensionSend(input: unknown, key: string,traceId?:string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).create(input,key,traceId)); }
   pollExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).poll(input)); }
   progressExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).progress(input)); }
   cancelExtensionSend(id: string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).cancel(id)); }

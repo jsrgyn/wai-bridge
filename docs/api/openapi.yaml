@@ -8,6 +8,19 @@ servers:
 security:
   - LocalBearer: []
 paths:
+  /api/diagnostics/logs:
+    get:
+      summary: Query bounded correlated operational logs (FlowLogQuerySchema)
+      description: Optional traceId/resourceId UUID, component, level, beforeSequence and limit (1–100, default50). See docs/operations/flow-logging.md.
+      responses:
+        '200':
+          description: items, nextBeforeSequence, latestRecorded, commandStatus, resolvedTraceId, coverage and retention
+    post:
+      summary: Append diagnostic events (FlowLogBatchSchema)
+      description: Strict shared contract with 1–50 events, UUID correlation, enumerated component/phase/code; no message text, names, phone numbers or secrets. Duplicate IDs are accepted without reinsertion.
+      responses:
+        '202':
+          description: accepted and inserted counts
   /health:
     get:
       security: []
@@ -209,8 +222,23 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [messageId, consumerId], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, leaseMs: { type: integer, minimum: 1000, maximum: 86400000, default: 60000 } } }
-      responses: { '200': { description: Consumer-specific lease, claim token, and persistent attempt count }, '409': { $ref: '#/components/responses/Error' } }
+            schema:
+              {
+                type: object,
+                required: [messageId, consumerId],
+                properties:
+                  {
+                    messageId: { $ref: '#/components/schemas/Id' },
+                    consumerId: { type: string, minLength: 1, maxLength: 128 },
+                    leaseMs: { type: integer, minimum: 1000, maximum: 86400000, default: 60000 },
+                  },
+              }
+      responses:
+        {
+          '200':
+            { description: Consumer-specific lease, claim token, and persistent attempt count },
+          '409': { $ref: '#/components/responses/Error' },
+        }
   /api/ai/consumer-ack:
     post:
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
@@ -218,8 +246,22 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [messageId, consumerId, claimToken], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, claimToken: { $ref: '#/components/schemas/Id' } } }
-      responses: { '200': { description: Explicit ACK marks this consumer state READ }, '409': { $ref: '#/components/responses/Error' } }
+            schema:
+              {
+                type: object,
+                required: [messageId, consumerId, claimToken],
+                properties:
+                  {
+                    messageId: { $ref: '#/components/schemas/Id' },
+                    consumerId: { type: string, minLength: 1, maxLength: 128 },
+                    claimToken: { $ref: '#/components/schemas/Id' },
+                  },
+              }
+      responses:
+        {
+          '200': { description: Explicit ACK marks this consumer state READ },
+          '409': { $ref: '#/components/responses/Error' },
+        }
   /api/ai/consumer-fail:
     post:
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
@@ -227,15 +269,61 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [messageId, consumerId, claimToken, errorCode], properties: { messageId: { $ref: '#/components/schemas/Id' }, consumerId: { type: string, minLength: 1, maxLength: 128 }, claimToken: { $ref: '#/components/schemas/Id' }, errorCode: { type: string, pattern: '^[A-Z0-9_]{1,64}$' } } }
-      responses: { '200': { description: Failure is recorded and eligible for reprocessing }, '409': { $ref: '#/components/responses/Error' } }
+            schema:
+              {
+                type: object,
+                required: [messageId, consumerId, claimToken, errorCode],
+                properties:
+                  {
+                    messageId: { $ref: '#/components/schemas/Id' },
+                    consumerId: { type: string, minLength: 1, maxLength: 128 },
+                    claimToken: { $ref: '#/components/schemas/Id' },
+                    errorCode: { type: string, pattern: '^[A-Z0-9_]{1,64}$' },
+                  },
+              }
+      responses:
+        {
+          '200': { description: Failure is recorded and eligible for reprocessing },
+          '409': { $ref: '#/components/responses/Error' },
+        }
   /api/ai/consumers/{consumerId}/recoverable:
     get:
-      parameters: [{ name: consumerId, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }, { $ref: '#/components/parameters/Limit' }]
-      responses: { '200': { description: Unprocessed, failed, or expired-lease messages ordered by observedAt and id } }
+      parameters:
+        [
+          {
+            name: consumerId,
+            in: path,
+            required: true,
+            schema: { type: string, minLength: 1, maxLength: 128 },
+          },
+          { $ref: '#/components/parameters/Limit' },
+        ]
+      responses:
+        {
+          '200':
+            {
+              description: Unprocessed,
+              failed,
+              or expired-lease messages ordered by observedAt and id,
+            },
+        }
   /api/ai/messages/{messageId}/state:
     get:
-      parameters: [{ name: messageId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }, { name: consumerId, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }]
+      parameters:
+        [
+          {
+            name: messageId,
+            in: path,
+            required: true,
+            schema: { $ref: '#/components/schemas/Id' },
+          },
+          {
+            name: consumerId,
+            in: query,
+            required: true,
+            schema: { type: string, minLength: 1, maxLength: 128 },
+          },
+        ]
       responses: { '200': { description: Consumer-specific read state; GET is read-only } }
   /api/outbox:
     get:
@@ -277,13 +365,35 @@ paths:
         }
   /api/outbox/{id}/result:
     post:
-      parameters: [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters:
+        [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [result], properties: { result: { type: string, enum: [SENT, UNKNOWN, FAILED] }, evidenceRef: { type: string, minLength: 1, maxLength: 512 } }, allOf: [{ if: { properties: { result: { const: SENT } } }, then: { required: [evidenceRef] } }] }
-      responses: { '200': { description: Manual outcome recorded from verified evidence }, '404': { $ref: '#/components/responses/Error' }, '409': { $ref: '#/components/responses/Error' } }
+            schema:
+              {
+                type: object,
+                required: [result],
+                properties:
+                  {
+                    result: { type: string, enum: [SENT, UNKNOWN, FAILED] },
+                    evidenceRef: { type: string, minLength: 1, maxLength: 512 },
+                  },
+                allOf:
+                  [
+                    {
+                      if: { properties: { result: { const: SENT } } },
+                      then: { required: [evidenceRef] },
+                    },
+                  ],
+              }
+      responses:
+        {
+          '200': { description: Manual outcome recorded from verified evidence },
+          '404': { $ref: '#/components/responses/Error' },
+          '409': { $ref: '#/components/responses/Error' },
+        }
   /api/extension/outbox:
     post:
       summary: Persist an authorized extension send with optional verified phone search
@@ -317,8 +427,19 @@ paths:
               additionalProperties: false
               required: [phoneNumber, text, explicitAuthorization]
               properties:
-                phoneNumber: { type: string, minLength: 9, maxLength: 40, description: Full international phone with +DDI; formatting is normalized. }
-                accountId: { type: string, format: uuid, description: Optional only when exactly one recently active opted-in account exists. }
+                phoneNumber:
+                  {
+                    type: string,
+                    minLength: 9,
+                    maxLength: 40,
+                    description: Full international phone with +DDI; formatting is normalized.,
+                  }
+                accountId:
+                  {
+                    type: string,
+                    format: uuid,
+                    description: Optional only when exactly one recently active opted-in account exists.,
+                  }
                 text: { type: string, minLength: 1, maxLength: 10000 }
                 mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
                 explicitAuthorization: { type: boolean, const: true }
@@ -349,7 +470,13 @@ paths:
                 explicitAuthorization: { type: boolean, const: true }
       responses:
         '202': { description: Intent persisted or replayed; not delivery confirmation }
-        '409': { description: Missing or ambiguous account, name or phone, search too broad, or idempotency conflict }
+        '409':
+          {
+            description: Missing or ambiguous account,
+            name or phone,
+            search too broad,
+            or idempotency conflict,
+          }
   /api/extension/outbox/poll:
     post:
       summary: Native host claims one command for the current confirmed identity
@@ -406,12 +533,30 @@ components:
         text: { type: string, minLength: 1, maxLength: 10000 }
         mode: { type: string, enum: [AUTO, SUPERVISED], default: SUPERVISED }
         explicitAuthorization: { type: boolean, enum: [true] }
-        locateByPhone: { type: boolean, default: false, description: Search by stored direct-contact phone and verify the opened visible profile before composing. }
+        locateByPhone:
+          {
+            type: boolean,
+            default: false,
+            description: Search by stored direct-contact phone and verify the opened visible profile before composing.,
+          }
     Id: { type: string, format: uuid }
     CaptureObservation:
       type: object
       additionalProperties: false
-      required: [kind, observationId, observedAt, observationType, captureState, conversation, senderLabel, direction, content, contentAvailability, media]
+      required:
+        [
+          kind,
+          observationId,
+          observedAt,
+          observationType,
+          captureState,
+          conversation,
+          senderLabel,
+          direction,
+          content,
+          contentAvailability,
+          media,
+        ]
       properties:
         kind: { type: string, const: CAPTURE_OBSERVATION }
         observationId: { $ref: '#/components/schemas/Id' }
@@ -466,7 +611,17 @@ components:
             groupLabel: { type: string, minLength: 1, maxLength: 256 }
         - type: object
           additionalProperties: false
-          required: [version, accountId, contextId, confirmedAt, type, source, conversationKey, conversationKind]
+          required:
+            [
+              version,
+              accountId,
+              contextId,
+              confirmedAt,
+              type,
+              source,
+              conversationKey,
+              conversationKind,
+            ]
           properties:
             version: { type: integer, const: 1 }
             accountId: { $ref: '#/components/schemas/Id' }
@@ -476,7 +631,12 @@ components:
             source: { type: string, const: VISIBLE_UI }
             conversationKey: { $ref: '#/components/schemas/Id' }
             conversationKind: { type: string, enum: [INDIVIDUAL, GROUP, UNKNOWN] }
-            phone: { type: string, pattern: '^\+[1-9][0-9]{7,14}$', description: 'Optional visible profile phone; only permitted for INDIVIDUAL.' }
+            phone:
+              {
+                type: string,
+                pattern: '^\+[1-9][0-9]{7,14}$',
+                description: 'Optional visible profile phone; only permitted for INDIVIDUAL.',
+              }
     CaptureSubmission:
       type: object
       additionalProperties: false

@@ -26,6 +26,7 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
   let extensionInstanceId: string | undefined;
   let closed = false;
   const captureJobs = new Set<Promise<void>>();
+  const logJobs = new Set<Promise<void>>();
   const now = options.now ?? (() => new Date());
   const write = (message: Parameters<typeof writeNativeMessage>[1]) =>
     writeNativeMessage(options.output, message);
@@ -88,6 +89,57 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
           hostInstanceId,
           at: now().toISOString(),
         });
+      } else if (request.type === 'FLOW_LOGS') {
+        if (
+          !extensionInstanceId ||
+          request.extensionInstanceId !== extensionInstanceId ||
+          request.events.some(
+            (event) =>
+              !['EXTENSION_BACKGROUND', 'EXTENSION_CONTENT', 'WHATSAPP_UI'].includes(
+                event.component,
+              ),
+          )
+        ) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
+          continue;
+        }
+        if (logJobs.size) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'API_UNAVAILABLE',
+            at: now().toISOString(),
+          });
+          continue;
+        }
+        const job = options.api
+          .recordFlowLogs(request.events)
+          .then((result) =>
+            write({
+              version: 1,
+              id: request.id,
+              type: 'FLOW_LOGS_RESULT',
+              accepted: result.accepted,
+            }),
+          )
+          .catch(async () => {
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'ERROR',
+              code: 'API_UNAVAILABLE',
+              at: now().toISOString(),
+            }).catch(() => undefined);
+          });
+        logJobs.add(job);
+        void job.finally(() => logJobs.delete(job));
       } else if (request.type === 'SEND_POLL' || request.type === 'SEND_PROGRESS') {
         if (!extensionInstanceId || request.input.extensionInstanceId !== extensionInstanceId) {
           await write({
@@ -180,7 +232,7 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
   } finally {
     closed = true;
     clearInterval(timer);
-    await Promise.all(captureJobs);
+    await Promise.all([...captureJobs, ...logJobs]);
     await reportState('DISCONNECTED');
   }
 }

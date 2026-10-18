@@ -90,3 +90,7 @@ não significa SENT. ACK perdido preserva claim para recuperação e nunca redel
 Build divergente impede uso de content script antigo. Diagnóstico expõe códigos e
 contagens, não nomes/telefones/textos/tokens. Native capture concurrency é limitada
 para não bloquear o controle de envio; frames continuam atômicos e validados.
+
+## Logs operacionais (ADR0016)
+
+Contrato estrito sem conteúdo privado/campos livres, códigos enumerados e autenticação local existente. Native host valida sessão e componentes de logs originados da extensão. Filas/batches e retenção limitam crescimento; diagnóstico não é evidência administrativa confiável nem autorização para efeitos. Conteúdo WhatsApp nunca é interpretado como instrução. Logs não devem ser publicados com a configuração/token local.
