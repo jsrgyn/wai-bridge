@@ -552,3 +552,63 @@ it('correlates MCP/API/SQLite sends and capture reads without retaining private 
  const denied=await app.inject({method:'POST',url:'/api/diagnostics/logs',payload:{events:[]}});expect(denied.statusCode).toBe(401);
  const before=db.prepare('SELECT count(*) n FROM wa_flow_logs').get();const invalid=await app.inject({method:'POST',url:'/api/diagnostics/logs',headers:{authorization:`Bearer ${token}`},payload:{events:[{text:'SYNTHETIC_PRIVATE_INPUT'}]}});expect(invalid.statusCode).toBe(400);expect(db.prepare('SELECT count(*) n FROM wa_flow_logs').get()).toEqual(before);
 });
+
+it('persists revisions and late attachments once, retains originals and does not mark messages read',async()=>{
+ const {db,capture,tool}=await setup();
+ const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,confirmedAt:'2026-10-18T12:00:00.000Z'};
+ const first=observation({identity,conversation:{label:'Synthetic revision contact',kind:'INDIVIDUAL'},media:[],messageRef:{key:randomUUID(),revision:1,firstObservedAt:'2026-10-18T12:00:00.000Z'}});
+ expect((await capture(first)).statusCode).toBe(202);
+ const edited=observation({...first,observationId:randomUUID(),observedAt:'2026-10-18T12:01:00.000Z',content:'Synthetic edited content',media:['AUDIO'],messageRef:{...first.messageRef!,revision:2}});
+ expect((await capture(edited)).statusCode).toBe(202);
+ expect((await capture(edited)).json().duplicate).toBe(true);
+ const id=(db.prepare('SELECT id FROM wa_conversations').get() as {id:string}).id;
+ const result=await tool('whatsapp_get_dialogue',{conversationId:id,limit:20});
+ expect(result.messages).toHaveLength(1);expect(result.messages[0]).toMatchObject({content:edited.content,sequence:1,sourceObservationId:edited.observationId});
+ expect(result.captureCoverage).toMatchObject({messageCount:1,complete:false,scope:'OBSERVED_UI_ONLY'});
+ expect(JSON.parse((db.prepare('SELECT payload_json FROM wa_capture_observations WHERE id=?').get(first.observationId) as {payload_json:string}).payload_json).content).toBe(first.content);
+ expect(result.messages[0].media).toEqual([expect.objectContaining({kind:'AUDIO',availability:'UNAVAILABLE'})]);
+ expect(db.prepare('SELECT count(*) n FROM wa_media').get()).toEqual({n:1});
+ expect(db.prepare('SELECT state FROM wa_ai_message_state').get()).toMatchObject({state:'UNREAD'});
+ expect(db.prepare("SELECT count(*) n FROM wa_events WHERE event_type='message.updated' AND aggregate_type='message'").get()).toEqual({n:1});
+ const bad=await capture({...edited,observationId:randomUUID(),messageRef:{...edited.messageRef!,revision:3},direction:'OUTBOUND'});
+ expect(bad.statusCode).toBe(409);expect(db.prepare('SELECT count(*) n FROM wa_messages').get()).toEqual({n:1});
+});
+
+it('keeps the latest revision when arrivals are out of order and rejects a foreign conversation reference',async()=>{
+ const {db,capture}=await setup();
+ const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,confirmedAt:'2026-10-18T12:00:00.000Z'};
+ const latest=observation({identity,conversation:{label:'Synthetic order',kind:'INDIVIDUAL'},media:[],observedAt:'2026-10-18T12:03:00.000Z',content:'Synthetic latest',messageRef:{key:randomUUID(),revision:3,firstObservedAt:'2026-10-18T12:00:00.000Z'}});
+ expect((await capture(latest)).statusCode).toBe(202);
+ expect((await capture({...latest,observationId:randomUUID(),content:'Synthetic older',observedAt:'2026-10-18T12:01:00.000Z',messageRef:{...latest.messageRef!,revision:1}})).statusCode).toBe(202);
+ expect(db.prepare('SELECT content FROM wa_messages').all()).toEqual([{content:'Synthetic latest'}]);
+ const foreign={...latest,observationId:randomUUID(),messageRef:{...latest.messageRef!,revision:4},identity:{...identity,conversationKey:randomUUID()}};
+ expect((await capture(foreign)).statusCode).toBe(409);
+ expect(db.prepare('SELECT count(*) n FROM wa_conversations').get()).toEqual({n:1});
+});
+
+it('links closed-row activity to its later dialogue and reports unavailable coverage through MCP',async()=>{
+ const {db,capture,tool}=await setup();
+ const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'UNKNOWN' as const,confirmedAt:'2026-10-18T12:00:00.000Z'};
+ const activity=observation({identity,conversation:{label:'Synthetic closed contact',kind:'UNKNOWN'},observationType:'CONVERSATION_ACTIVITY',captureState:'DETECTED',direction:'UNKNOWN',content:null,contentAvailability:'UNAVAILABLE',media:[]});
+ expect((await capture(activity)).statusCode).toBe(202);
+ const conversationId=(db.prepare('SELECT id FROM wa_conversations').get() as {id:string}).id;
+ const found=await tool('whatsapp_list_conversations',{query:'closed contact',limit:20});expect(found.items).toHaveLength(1);expect(found.items[0].id).toBe(conversationId);
+ const before=await tool('whatsapp_get_dialogue',{conversationId,limit:20});
+ expect(before.messages).toEqual([]);expect(before.captureCoverage).toMatchObject({activitySignalCount:1,messageCount:0,complete:false,recentActivity:[{observationId:activity.observationId,observedAt:activity.observedAt}]});
+ const msg=observation({identity:{...identity,conversationKind:'INDIVIDUAL'},conversation:{label:'Synthetic closed contact',kind:'INDIVIDUAL'},media:['DOCUMENT'],content:null,contentAvailability:'UNAVAILABLE',captureState:'PENDING'});
+ expect((await capture(msg)).statusCode).toBe(202);
+ const after=await tool('whatsapp_get_dialogue',{conversationId,limit:20});
+ expect(after.messages).toHaveLength(1);expect(after.captureCoverage).toMatchObject({activitySignalCount:1,messageCount:1,unavailableMessageCount:1,complete:false});
+ expect(db.prepare('SELECT count(*) n FROM wa_conversations').get()).toEqual({n:1});
+});
+
+it('promotes a direction-unknown shell to one available message after later DOM hydration',async()=>{
+ const {db,capture,tool}=await setup();
+ const shell=observation({conversation:{label:'Synthetic shell',kind:'INDIVIDUAL'},direction:'UNKNOWN',content:null,contentAvailability:'UNAVAILABLE',captureState:'PENDING',media:[],messageRef:{key:randomUUID(),revision:1,firstObservedAt:'2026-10-18T12:00:00.000Z'}});
+ expect((await capture(shell)).statusCode).toBe(202);
+ expect(db.prepare('SELECT count(*) n FROM wa_messages').get()).toEqual({n:0});
+ const hydrated={...shell,observationId:randomUUID(),observedAt:'2026-10-18T12:01:00.000Z',direction:'OUTBOUND' as const,content:'Synthetic synchronized phone message',contentAvailability:'AVAILABLE' as const,captureState:'CAPTURED' as const,messageRef:{...shell.messageRef!,revision:2}};
+ expect((await capture(hydrated)).statusCode).toBe(202);
+ const conversationId=(db.prepare('SELECT id FROM wa_conversations').get() as {id:string}).id;
+ const dialogue=await tool('whatsapp_get_dialogue',{conversationId,limit:20});expect(dialogue.messages).toHaveLength(1);expect(dialogue.messages[0]).toMatchObject({direction:'OUTBOUND',content:hydrated.content,sequence:1});
+});

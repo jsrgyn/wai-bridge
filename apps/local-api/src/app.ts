@@ -1,3 +1,29 @@
+import { OperationsRepository, DialogueSyncBatchRepository } from '@wai-bridge/database';
+import {
+  ContactCreateSchema,
+  ContactUpdateSchema,
+  CandidateQuerySchema,
+  CandidateDecisionSchema,
+  PolicyUpdateSchema,
+  MaintenanceUpdateSchema,
+  ExtensionTelemetrySchema,
+  RetryBatchFailuresSchema,
+} from '@wai-bridge/shared';
+import {
+  ContactDirectoryQuerySchema,
+  DialogueSyncBatchRequestSchema,
+  DialogueSyncBatchPageQuerySchema,
+  DialogueSyncBatchActionSchema,
+  DialogueSyncBatchResumeSchema,
+} from '@wai-bridge/shared';
+import {
+  ConversationReviewQuerySchema,
+  ConversationReviewAckSchema,
+  ConversationReviewLinkSchema,
+  DialogueSyncRequestSchema,
+  DialogueSyncPollSchema,
+  DialogueSyncCompletionSchema,
+} from '@wai-bridge/shared';
 import { FlowLogRepository } from '@wai-bridge/database';
 import { FlowLogBatchSchema, FlowLogQuerySchema, flowCode } from '@wai-bridge/shared';
 import {
@@ -34,6 +60,7 @@ export interface AppOptions {
   readonly db: Database.Database;
   readonly apiToken: string;
   readonly logger?: boolean;
+  readonly maintenance?: import('@wai-bridge/database').MaintenanceService;
   readonly outboxDispatcher?: OutboxDispatcher;
 }
 function bearerMatches(header: string | undefined, token: string): boolean {
@@ -86,6 +113,11 @@ export function buildApp(options: AppOptions): FastifyInstance {
     bodyLimit: 64 * 1024,
     genReqId: () => randomUUID(),
   });
+  app.addHook('onClose', async () => {
+    await options.maintenance?.stop();
+  });
+  const operations = new OperationsRepository(options.db);
+  const batches = new DialogueSyncBatchRepository(options.db);
   const service = new ApiService(options.db, (id) => options.outboxDispatcher?.cancelWait(id));
   const controller = new ApiController(service);
   const flowLogs = new FlowLogRepository(options.db);
@@ -142,11 +174,18 @@ export function buildApp(options: AppOptions): FastifyInstance {
         if (
           !route?.startsWith('/api/diagnostics/') &&
           route !== '/api/extension/outbox/poll' &&
+          route !== '/api/extension/dialogue-sync/poll' &&
           route !== '/api/extension/state'
         ) {
           const raw = request.body as
             { commandId?: unknown; observation?: { observationId?: unknown } } | undefined;
-          const resource = z.uuid().safeParse(raw?.commandId ?? raw?.observation?.observationId);
+          const resource = z
+            .uuid()
+            .safeParse(
+              raw?.commandId ??
+                raw?.observation?.observationId ??
+                (request.params as { id?: unknown })?.id,
+            );
           const context = {
             traceId: traceFor(request),
             start: performance.now(),
@@ -170,6 +209,160 @@ export function buildApp(options: AppOptions): FastifyInstance {
       api.get('/diagnostics/logs', async (request) =>
         flowLogs.list(parse(FlowLogQuerySchema, request.query)),
       );
+      const managed = <T>(work: () => T): T => {
+        try {
+          return work();
+        } catch (error) {
+          if (error instanceof z.ZodError) throw error;
+          const code = error instanceof Error ? error.message : 'OPERATION_FAILED';
+          if (/^[A-Z_]+$/.test(code))
+            throw new ApiError(
+              code.endsWith('NOT_FOUND') ? 404 : 409,
+              code,
+              'Operation could not be completed',
+            );
+          throw error;
+        }
+      };
+      api.post('/contact-catalog', async (request, reply) =>
+        reply
+          .code(201)
+          .send(managed(() => operations.create(parse(ContactCreateSchema, request.body)))),
+      );
+      api.get('/contact-catalog/:id', async (request) =>
+        managed(() => operations.contact(parse(IdParamsSchema, request.params).id)),
+      );
+      api.patch('/contact-catalog/:id', async (request) =>
+        managed(() =>
+          operations.update(
+            parse(IdParamsSchema, request.params).id,
+            parse(ContactUpdateSchema, request.body),
+          ),
+        ),
+      );
+      api.get('/reference-candidates', async (request) =>
+        managed(() => operations.candidates(parse(CandidateQuerySchema, request.query))),
+      );
+      api.post('/reference-candidates/decisions', async (request) =>
+        managed(() => operations.decide(parse(CandidateDecisionSchema, request.body))),
+      );
+      api.get('/conversation-policies/:id', async (request) =>
+        managed(() => operations.policy(parse(IdParamsSchema, request.params).id)),
+      );
+      api.post('/conversation-policies/:id', async (request) =>
+        managed(() =>
+          operations.setPolicy(
+            parse(IdParamsSchema, request.params).id,
+            parse(PolicyUpdateSchema, request.body),
+          ),
+        ),
+      );
+      api.get('/operations', async () => ({
+        ...operations.summary(),
+        runtime: controller.status(),
+      }));
+      api.post('/maintenance/backup', async (request) => {
+        parse(z.object({ explicitConfirmation: z.literal(true) }).strict(), request.body);
+        if (!options.maintenance)
+          throw new ApiError(503, 'MAINTENANCE_UNAVAILABLE', 'Backup service unavailable');
+        return options.maintenance.run();
+      });
+      api.get('/maintenance', async () => operations.maintenance());
+      api.post('/maintenance', async (request) =>
+        operations.setMaintenance(parse(MaintenanceUpdateSchema, request.body)),
+      );
+      api.post('/extension-telemetry/:id', async (request) =>
+        operations.telemetry(
+          parse(IdParamsSchema, request.params).id,
+          parse(ExtensionTelemetrySchema, request.body),
+        ),
+      );
+      api.get('/dialogue-sync-batches/:id/report', async (request) =>
+        managed(() =>
+          batches.report(
+            parse(IdParamsSchema, request.params).id,
+            parse(DialogueSyncBatchPageQuerySchema, request.query),
+          ),
+        ),
+      );
+      api.post('/dialogue-sync-batches/:id/retry-failed', async (request, reply) =>
+        reply
+          .code(202)
+          .send(
+            managed(() =>
+              batches.retryFailed(
+                parse(IdParamsSchema, request.params).id,
+                parse(RetryBatchFailuresSchema, request.body),
+              ),
+            ),
+          ),
+      );
+      api.get('/contacts/directory', async (request) =>
+        controller.listContactDirectory(parse(ContactDirectoryQuerySchema, request.query)),
+      );
+      api.post('/dialogue-sync-batches', async (request, reply) =>
+        reply
+          .code(202)
+          .send(
+            controller.requestDialogueBatch(parse(DialogueSyncBatchRequestSchema, request.body)),
+          ),
+      );
+      api.get('/dialogue-sync-batches/:id', async (request) =>
+        controller.dialogueBatch(
+          parse(IdParamsSchema, request.params).id,
+          parse(DialogueSyncBatchPageQuerySchema, request.query),
+        ),
+      );
+      api.post('/dialogue-sync-batches/:id/cancel', async (request) =>
+        controller.cancelDialogueBatch(
+          parse(IdParamsSchema, request.params).id,
+          parse(DialogueSyncBatchActionSchema, request.body),
+        ),
+      );
+      api.post('/dialogue-sync-batches/:id/resume', async (request) =>
+        controller.resumeDialogueBatch(
+          parse(IdParamsSchema, request.params).id,
+          parse(DialogueSyncBatchResumeSchema, request.body),
+        ),
+      );
+      api.get('/conversation-reviews', async (request) =>
+        controller.listConversationReviews(parse(ConversationReviewQuerySchema, request.query)),
+      );
+      api.get('/conversation-reviews/:id', async (request) =>
+        controller.conversationReview(parse(IdParamsSchema, request.params).id),
+      );
+      api.post('/conversation-reviews/:id/ack', async (request) =>
+        controller.acknowledgeConversationReview(
+          parse(IdParamsSchema, request.params).id,
+          parse(ConversationReviewAckSchema, request.body),
+        ),
+      );
+      api.post('/conversation-reviews/:id/links', async (request) =>
+        controller.linkConversationReview(
+          parse(IdParamsSchema, request.params).id,
+          parse(ConversationReviewLinkSchema, request.body),
+        ),
+      );
+      api.post('/dialogue-sync', async (request, reply) =>
+        reply
+          .code(202)
+          .send(controller.requestDialogueSync(parse(DialogueSyncRequestSchema, request.body))),
+      );
+      api.get('/dialogue-sync/:id/messages', async (request) =>
+        controller.dialogueSyncMessages(parse(IdParamsSchema, request.params).id),
+      );
+      api.get('/dialogue-sync/:id', async (request) =>
+        controller.dialogueSyncStatus(parse(IdParamsSchema, request.params).id),
+      );
+      api.post('/extension/dialogue-sync/poll', async (request) =>
+        controller.pollDialogueSync(parse(DialogueSyncPollSchema, request.body)),
+      );
+      api.post(
+        '/extension/dialogue-sync/complete',
+        { bodyLimit: 4 * 1024 * 1024 },
+        async (request) =>
+          controller.completeDialogueSync(parse(DialogueSyncCompletionSchema, request.body)),
+      );
       api.get('/status', async () => controller.status());
       api.post('/extension/state', async (request, reply) => {
         const state = parse(ExtensionStateSchema, request.body);
@@ -190,10 +383,18 @@ export function buildApp(options: AppOptions): FastifyInstance {
         controller.searchContacts(parse(SearchQuerySchema, request.query)),
       );
       api.get('/conversations', async (request) =>
-        controller.conversations(parse(PageQuerySchema, request.query)),
+        controller.conversations(
+          parse(
+            PageQuerySchema.extend({ q: z.string().trim().min(2).max(100).optional() }),
+            request.query,
+          ),
+        ),
       );
       api.get('/conversations/:id', async (request) =>
         controller.conversation(parse(IdParamsSchema, request.params).id),
+      );
+      api.get('/conversations/:id/capture-coverage', async (request) =>
+        controller.captureCoverage(parse(IdParamsSchema, request.params).id),
       );
       api.get('/conversations/:id/messages', async (request) =>
         controller.conversationMessages(

@@ -268,7 +268,7 @@ test('popup renders state with text nodes and toggles monitoring', async ({ page
   await expect(page.locator('#errors')).toContainText('The page structure is not supported.');
 });
 
-test('captures hydrated current UI bubbles with direction and ignores existing edits', async ({
+test('captures hydrated current UI bubbles and changes after the initial baseline', async ({
   page,
 }) => {
   const delivered: Array<Record<string, unknown>> = [];
@@ -345,7 +345,7 @@ test('captures hydrated current UI bubbles with direction and ignores existing e
     ).style.direction = 'rtl';
     document.querySelector('#removed')!.remove();
   });
-  await expect.poll(() => delivered.length).toBe(5);
+  await expect.poll(() => delivered.length).toBe(6);
   expect(delivered).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -363,20 +363,25 @@ test('captures hydrated current UI bubbles with direction and ignores existing e
       expect.objectContaining({ content: 'Synthetic rtl', direction: 'UNKNOWN' }),
     ]),
   );
-  expect(delivered.some((item) => String(item.content).includes('Historical'))).toBe(false);
+  expect(delivered.filter((item) => String(item.content).includes('Historical'))).toEqual([
+    expect.objectContaining({
+      content: 'Historical synthetic edit',
+      messageRef: expect.objectContaining({ revision: 1 }),
+    }),
+  ]);
   // A later metadata update must not duplicate the captured message.
   await page.evaluate(() => {
     document.querySelector('#incoming [data-testid="msg-meta"]')!.textContent = 'Synthetic status';
   });
   await page.waitForTimeout(200);
-  expect(delivered).toHaveLength(5);
+  expect(delivered).toHaveLength(6);
   expect(delivered[0]).toMatchObject({ conversation: { label: 'Synthetic chat' } });
   await page.evaluate(() => {
     const row = document.querySelector('#incoming')!;
     row.replaceWith(row.cloneNode(true));
   });
   await page.waitForTimeout(250);
-  expect(delivered).toHaveLength(5);
+  expect(delivered).toHaveLength(6);
   // A genuinely different row with identical text must still be captured.
   await page.evaluate(() => {
     const row = document.querySelector('#incoming')!.cloneNode(true) as HTMLElement;
@@ -384,7 +389,7 @@ test('captures hydrated current UI bubbles with direction and ignores existing e
     row.setAttribute('data-testid', 'conv-msg-synthetic-distinct');
     document.querySelector('#messages')!.append(row);
   });
-  await expect.poll(() => delivered.length).toBe(6);
+  await expect.poll(() => delivered.length).toBe(7);
   expect(delivered.filter((item) => item.content === 'Synthetic incoming')).toHaveLength(2);
 });
 

@@ -33,6 +33,15 @@ backup/
 media/
 conversation-data/
 whatsapp-data/
+private-data/
+runtime-data/
+captures/
+artifacts-private/
+*.har
+*.pcap
+*.trace
+*.crash
+*.ips
 *.sqlite
 *.sqlite3
 *.db
@@ -52,6 +61,8 @@ whatsapp-data/
 # Private logs and diagnostics
 *.log
 logs/
+.direnv/
+.envrc
 
 # OS/editor temporary files
 .DS_Store

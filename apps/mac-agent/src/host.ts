@@ -27,6 +27,7 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
   let closed = false;
   const captureJobs = new Set<Promise<void>>();
   const logJobs = new Set<Promise<void>>();
+  const managementJobs = new Set<Promise<void>>();
   const now = options.now ?? (() => new Date());
   const write = (message: Parameters<typeof writeNativeMessage>[1]) =>
     writeNativeMessage(options.output, message);
@@ -59,6 +60,10 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
     for await (const request of new NativeMessageReader(options.input).readMessages()) {
       if (request.type === 'HELLO') {
         extensionInstanceId = request.extensionInstanceId;
+        if ('telemetry' in request && request.telemetry)
+          await options.api
+            .telemetry(extensionInstanceId, request.telemetry)
+            .catch(() => undefined);
         await reportState('CONNECTED');
         await write({
           version: 1,
@@ -68,6 +73,46 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
           hostInstanceId,
           at: now().toISOString(),
         });
+      } else if (request.type === 'MANAGEMENT') {
+        if (!extensionInstanceId || extensionInstanceId !== request.extensionInstanceId) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
+          continue;
+        }
+        if (managementJobs.size >= 10) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'MANAGEMENT_FAILURE',
+            code: 'MANAGEMENT_BUSY',
+          });
+          continue;
+        }
+        const job = (async () => {
+          try {
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'MANAGEMENT_RESULT',
+              result: await options.api.management(request.input),
+            });
+          } catch (error) {
+            const code =
+              error instanceof Error && /^[A-Z_]{1,80}$/.test(error.message)
+                ? error.message
+                : 'MANAGEMENT_FAILED';
+            await write({ version: 1, id: request.id, type: 'MANAGEMENT_FAILURE', code });
+          }
+        })().catch(() => {
+          options.stderr.write('Management response write failed.\n');
+        });
+        managementJobs.add(job);
+        void job.finally(() => managementJobs.delete(job));
       } else if (request.type === 'HEARTBEAT') {
         if (extensionInstanceId && extensionInstanceId !== request.extensionInstanceId) {
           await write({
@@ -80,6 +125,10 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
           continue;
         }
         extensionInstanceId = request.extensionInstanceId;
+        if ('telemetry' in request && request.telemetry)
+          await options.api
+            .telemetry(extensionInstanceId, request.telemetry)
+            .catch(() => undefined);
         await reportState('CONNECTED');
         await write({
           version: 1,
@@ -140,6 +189,41 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
           });
         logJobs.add(job);
         void job.finally(() => logJobs.delete(job));
+      } else if (request.type === 'SYNC_POLL' || request.type === 'SYNC_COMPLETE') {
+        if (!extensionInstanceId || request.input.extensionInstanceId !== extensionInstanceId) {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'INVALID_REQUEST',
+            at: now().toISOString(),
+          });
+          continue;
+        }
+        try {
+          if (request.type === 'SYNC_POLL')
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'SYNC_POLL_RESULT',
+              result: await options.api.syncPoll(request.input),
+            });
+          else
+            await write({
+              version: 1,
+              id: request.id,
+              type: 'SYNC_COMPLETE_RESULT',
+              result: await options.api.syncComplete(request.input),
+            });
+        } catch {
+          await write({
+            version: 1,
+            id: request.id,
+            type: 'ERROR',
+            code: 'API_UNAVAILABLE',
+            at: now().toISOString(),
+          });
+        }
       } else if (request.type === 'SEND_POLL' || request.type === 'SEND_PROGRESS') {
         if (!extensionInstanceId || request.input.extensionInstanceId !== extensionInstanceId) {
           await write({
@@ -232,7 +316,7 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
   } finally {
     closed = true;
     clearInterval(timer);
-    await Promise.all([...captureJobs, ...logJobs]);
+    await Promise.all([...captureJobs, ...logJobs, ...managementJobs]);
     await reportState('DISCONNECTED');
   }
 }

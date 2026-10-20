@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { build } from 'esbuild';
+import { build, stop } from 'esbuild';
 import type { VisibleSendExecutor } from '../../src/commands/visible-send.js';
 import type { IdentityContext } from '../../src/identity/context.js';
 import type { ExtensionSendCommand } from '@wai-bridge/shared';
@@ -30,6 +30,7 @@ const bundled = await build({
   target: 'chrome120',
 });
 const script = bundled.outputFiles[0]!.text;
+stop();
 async function setup(
   page: Page,
   mode: 'AUTO' | 'SUPERVISED' = 'AUTO',

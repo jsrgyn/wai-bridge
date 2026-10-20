@@ -2,11 +2,39 @@ import type { ApiService } from '../services/api-service.js';
 import type { CaptureObservation } from '@wai-bridge/shared';
 import type { MessageQuery, PageQuery } from '../types.js';
 export class ApiController {
+  listContactDirectory(input:unknown) { return this.service.listContactDirectory(input); }
+  requestDialogueBatch(input:unknown) { return this.service.requestDialogueBatch(input); }
+  dialogueBatch(id:string,input:unknown) { return this.service.dialogueBatch(id,input); }
+  cancelDialogueBatch(id:string,input:unknown) { return this.service.cancelDialogueBatch(id,input); }
+  resumeDialogueBatch(id:string,input:unknown) { return this.service.resumeDialogueBatch(id,input); }
+  listConversationReviews(input: unknown) { return this.service.listConversationReviews(input); }
+  conversationReview(id: string) { return this.service.conversationReview(id); }
+  acknowledgeConversationReview(id: string, input: unknown) { return this.service.acknowledgeConversationReview(id,input); }
+  linkConversationReview(id: string, input: unknown) { return this.service.linkConversationReview(id,input); }
+  requestDialogueSync(input: unknown) {
+    return this.service.requestDialogueSync(input);
+  }
+  dialogueSyncStatus(id: string) {
+    return this.service.dialogueSyncStatus(id);
+  }
+  dialogueSyncMessages(id: string) {
+    return this.service.dialogueSyncMessages(id);
+  }
+  pollDialogueSync(input: unknown) {
+    return this.service.pollDialogueSync(input);
+  }
+  completeDialogueSync(input: unknown) {
+    return this.service.completeDialogueSync(input);
+  }
   constructor(private readonly service: ApiService) {}
   status() {
     return this.service.status();
   }
-  recordExtensionState(input: { extensionInstanceId: string; status: 'CONNECTED' | 'DISCONNECTED'; lastSeenAt: string }) {
+  recordExtensionState(input: {
+    extensionInstanceId: string;
+    status: 'CONNECTED' | 'DISCONNECTED';
+    lastSeenAt: string;
+  }) {
     return this.service.recordExtensionState(input);
   }
   recordObservation(input: { extensionInstanceId: string; observation: CaptureObservation }) {
@@ -21,8 +49,11 @@ export class ApiController {
   searchContacts(q: PageQuery & { q: string }) {
     return this.service.searchContacts(q);
   }
-  conversations(q: PageQuery) {
+  conversations(q: PageQuery & { q?: string | undefined }) {
     return this.service.conversations(q);
+  }
+  captureCoverage(id: string) {
+    return this.service.captureCoverage(id);
   }
   conversation(id: string) {
     return this.service.conversation(id);
@@ -30,11 +61,31 @@ export class ApiController {
   messages(q: MessageQuery) {
     return this.service.messages(q);
   }
-  recoverableMessages(consumerId: string, limit: number) { return this.service.recoverableMessages(consumerId, limit); }
-  consumerMessageState(messageId:string,consumerId:string){return this.service.consumerMessageState(messageId,consumerId);}
-  claimForConsumer(input: { messageId: string; consumerId: string; leaseMs: number }) { return this.service.claimForConsumer(input.messageId, input.consumerId, input.leaseMs); }
-  acknowledgeForConsumer(input: { messageId: string; consumerId: string; claimToken: string }) { return this.service.acknowledgeForConsumer(input.messageId, input.consumerId, input.claimToken); }
-  failForConsumer(input: { messageId: string; consumerId: string; claimToken: string; errorCode: string }) { return this.service.failForConsumer(input.messageId, input.consumerId, input.claimToken, input.errorCode); }
+  recoverableMessages(consumerId: string, limit: number) {
+    return this.service.recoverableMessages(consumerId, limit);
+  }
+  consumerMessageState(messageId: string, consumerId: string) {
+    return this.service.consumerMessageState(messageId, consumerId);
+  }
+  claimForConsumer(input: { messageId: string; consumerId: string; leaseMs: number }) {
+    return this.service.claimForConsumer(input.messageId, input.consumerId, input.leaseMs);
+  }
+  acknowledgeForConsumer(input: { messageId: string; consumerId: string; claimToken: string }) {
+    return this.service.acknowledgeForConsumer(input.messageId, input.consumerId, input.claimToken);
+  }
+  failForConsumer(input: {
+    messageId: string;
+    consumerId: string;
+    claimToken: string;
+    errorCode: string;
+  }) {
+    return this.service.failForConsumer(
+      input.messageId,
+      input.consumerId,
+      input.claimToken,
+      input.errorCode,
+    );
+  }
   unread(q: PageQuery) {
     return this.service.unread(q);
   }
@@ -76,5 +127,7 @@ export class ApiController {
   cancelOutbox(id: string) {
     return this.service.cancelOutbox(id);
   }
-  recordOutboxResult(id:string,result:'SENT'|'UNKNOWN'|'FAILED',evidenceRef?:string){return this.service.recordOutboxResult(id,result,evidenceRef);}
+  recordOutboxResult(id: string, result: 'SENT' | 'UNKNOWN' | 'FAILED', evidenceRef?: string) {
+    return this.service.recordOutboxResult(id, result, evidenceRef);
+  }
 }

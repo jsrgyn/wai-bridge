@@ -106,3 +106,65 @@ Cancelamento continua pela rota anterior; supervisão transmite término para a 
 ## Logs de fluxo
 
 GET/POST `/api/diagnostics/logs`, autenticados pelo Bearer local. POST aceita FlowLogBatchSchema estrito (1–50 eventos) e retorna 202 `{accepted, inserted}`; GET usa FlowLogQuerySchema (traceId/resourceId UUID, component, level, beforeSequence, limit até100). Header opcional `x-wai-trace-id` UUID correlaciona solicitações; resposta devolve o trace. Consulte [guia de diagnóstico](../operations/flow-logging.md).
+
+## Captura e cobertura (schema12)
+
+POST /api/observations aceita messageRef opcional (UUID key, revision positiva, firstObservedAt UTC não posterior a observedAt). MESSAGE atualiza projeção por referência local da instância; observações permanecem imutáveis. Replay do mesmo ID é idempotente; revisão mais antiga não sobrescreve. Conflitos de conversa/direção são409. CONVERSATION_ACTIVITY pode usar identidade UI_CONTEXT para vincular sinais à linha, sem conteúdo de mensagem presumido.
+
+GET /api/conversations aceita q opcional (2–100 caracteres, busca literal por título) com paginação existente. GET /api/conversations/:id/capture-coverage retorna CaptureCoverageSchema estrito, incluindo contagens, últimos20 sinais de atividade e complete=false. Mensagens incluem até16 metadados de mídia sem caminhos/bytes, mediaCount e mediaTruncated. MCP whatsapp_list_conversations aceita query; whatsapp_get_dialogue inclui captureCoverage. Fonte continua somente UI observada.
+
+### Reconciliação deliberada de diálogo (schema13 / ADR0018)
+
+- `POST /api/dialogue-sync`: `DialogueSyncRequestSchema` — query2..100, accountId opcional, limit1..50 (50), idempotencyKey16..128. Retorna202 com `DialogueSyncResultSchema`, persistido antes da navegação.
+- `GET /api/dialogue-sync/:id`: estado e cobertura; desconhecido404.
+- `GET /api/dialogue-sync/:id/messages`: somente SUCCEEDED; mensagens persistidas nos IDs/ordem do snapshot UI e nextCursor=null; estado não concluído409. Não retorna corpos diretamente da extensão.
+- `POST /api/extension/dialogue-sync/poll`: `DialogueSyncPollSchema`; preflight ready=false retorna pending sem claim. ready=true exige accountId; somente uma execução e nenhuma interface ocupada por envio. Retorna job/null.
+- `POST /api/extension/dialogue-sync/complete`: `DialogueSyncCompletionSchema`; até50 observações, limite HTTP4MiB apenas nesta rota. Lease e instância autenticam execução; identidade/conta/título/referências precisam coincidir. Observações e estado final são atômicos; replay de completion concluído não duplica. Falha de contexto/revisão reverte snapshot inteiro; nunca informar sucesso parcial como completo.
+
+Estados REQUESTED/CLAIMED/SUCCEEDED/FAILED/EXPIRED, TTL30s, no máximo20 pedidos pendentes, idempotência por chave e igualdade do request. Campos incluem conversationId, messageIds ordenados, observedCount/persistedCount, unknownDirectionCount, truncated, code, createdAt/completedAt/expiresAt, scope=VISIBLE_RENDERED_ONLY e complete=false. Não une conversas históricas por nome, baixa mídias, rola histórico, envia mensagens ou confirma AI READ. Rotas continuam Bearer/local e SQLite exclusivo da API. Permissão de envio não é pré-requisito para conferência solicitada; monitor ON é obrigatório na extensão.
+
+## Pendências de conversas — ADR0019
+
+Todas as rotas exigem bearer local e contratos Zod estritos:
+
+- `GET /api/conversation-reviews`: ConversationReviewQuerySchema → ConversationReviewPageSchema (`total`, `nextCursor`, `complete:false`). `pendingOnly=true` por padrão; `accountId`, `query`, `stage`, `limit1..100`, cursor UUID. Leitura paginada em ordem estável de UUID, sem navegação ou ACK.
+- `GET /api/conversation-reviews/:id`: ConversationReviewItemSchema; estágio derivado de sinais/revisões/jobs persistidos, incluindo expiração por prazo.
+- `POST /api/conversation-reviews/:id/ack`: `{syncRequestId,revision,explicitConfirmation:true}`. Exige último snapshot SUCCEEDED e revisão verificada atual, sem novo sinal. Replay idempotente; 409 REVIEW_STALE_CONFIRMATION; não altera AI READ/WhatsApp.
+- `POST /api/conversation-reviews/:id/links`: `{relatedConversationId,explicitConfirmation:true}`. Mesma conta, sem conflito de tipo/telefone; 409 REVIEW_IDENTITY_CONFLICT. Associação auditada e idempotente; não funde históricos ou confirma pendências.
+
+404 para referência inexistente, 400 para contrato inválido, 401 sem token. Indicador de não lidas é metadata observada, não quantidade de mensagens na fila. `signalCount` conta observações elegíveis, não mensagens únicas.
+
+`POST /api/dialogue-sync` aceita `conversationId` opcional para vincular à pendência selecionada; título exato/telefone único da fila também pode vincular pedido deliberado. Incompatibilidade de conta/título/identidade é 409; pedido concorrente para mesma referência é SYNC_ALREADY_PENDING. Watermark da fila é obtido no claim; sucesso só cobre sinais até esse ponto, sem confirmar leitura. Conteúdo reconciliado por esse pedido não gera notificações novas artificiais. Falhas/expiração não apagam pendências nem reexecutam navegação.
+
+## Diretório local e lotes — ADR0020/schema15
+
+- `GET /api/contacts/directory`: ContactDirectoryQuerySchema → ContactDirectoryPageSchema; somente SQLite, nome/apelido/nome completo/telefone nullable, filtros literais normalizados+datas locais, total/paginação. Não altera rotas legadas `/contacts` e `/contacts/search`. `registeredPeriod=TODAY|YESTERDAY`, `registeredOn` ou `registeredFrom/To`, fuso IANA padrão America/Sao_Paulo. Código400 para filtros incompatíveis/invalidade.
+- `POST /api/dialogue-sync-batches`: DialogueSyncBatchRequestSchema (`scope=ALL_PENDING|SELECTED`, conversationIds somente SELECTED, accountId opcional, explicitAuthorization:true, idempotencyKey, limitPerConversation1..50).202 retorna DialogueSyncBatchStatusSchema; snapshot imutável até5000, um RUNNING, prazo global24h.409 BATCH_TOO_LARGE/BATCH_BUSY/BATCH_ACCOUNT_REQUIRED/BATCH_ACCOUNT_MISMATCH/IDEMPOTENCY_CONFLICT;404 referência selecionada ausente. Não há truncamento silencioso.
+- `GET /api/dialogue-sync-batches/:id?cursor=0&limit=20`: DialogueSyncBatchPageSchema (`batch`, items, nextCursor), até100 itens. Consulta progresso/resultados não cria próximo job. Cada item SUCCEEDED aponta syncRequestId; diálogos lidos pelas rotas persistidas de sync existentes.
+- `POST /api/dialogue-sync-batches/:id/cancel`: `{explicitAuthorization:true}` → status. Cancela restante e sinaliza job ativo; idempotente, preserva sucessos.
+- `POST /api/dialogue-sync-batches/:id/resume`: `{explicitAuthorization:true,retryFailedItem:false}` → status. Somente PAUSED; novo runToken, sucessos não repetidos; retryFailedItem=true cria nova tentativa do item que causou a pausa.409 para terminal/busy.
+
+Todos autenticados por bearer local, contratos Zod estritos, logs sem dados privados. Native `SYNC_POLL` aceita `activeRequestId`+`leaseToken` juntos para consultar interrupção do leitor atual com instance/account exatas; resposta opcional cancelRequestId. Job opcional batch inclui id/runToken/posição/total/array de UUIDs. Extensão não decide transições nem acessa banco. ACK de leitura de pendência não é automático.
+
+## Gestão operacional — ADR0021/schema16
+
+Contratos de entrada/saída em `packages/shared/src/operations.ts`; todas as rotas abaixo exigem bearer local. Sem token no dashboard. Ver [guia operacional](../operations/operational-console.md) para semântica, limites e ativação.
+
+| Rota | Contrato e comportamento |
+| --- | --- |
+| POST /api/contact-catalog | ContactCreateSchema →201 ContactCatalogSchema; confirmação e chave idempotente |
+| GET /api/contact-catalog/:id | ContactCatalogSchema; campos locais e versão |
+| PATCH /api/contact-catalog/:id | ContactUpdateSchema →ContactCatalogSchema; expectedVersion;409 conflito/replay divergente |
+| GET /api/reference-candidates | CandidateQuerySchema →ReferenceCandidatePageSchema; proposta paginada |
+| POST /api/reference-candidates/decisions | CandidateDecisionSchema; LINK/DISMISS explícito, historiesMerged=false |
+| GET /api/conversation-policies/:id | ConversationPolicySchema |
+| POST /api/conversation-policies/:id | PolicyUpdateSchema →ConversationPolicySchema; não inicia lote |
+| GET /api/operations | OperationSummarySchema +runtime de /status; dados locais e telemetria parcial |
+| GET /api/dialogue-sync-batches/:id/report | DialogueSyncBatchPageQuerySchema →DialogueSyncBatchReportSchema |
+| POST /api/dialogue-sync-batches/:id/retry-failed | RetryBatchFailuresSchema →202 status de novo lote;409 NO_FAILED_ITEMS/BATCH_NOT_TERMINAL |
+| GET /api/maintenance | MaintenanceStatusSchema; últimos20 backups |
+| POST /api/maintenance | MaintenanceUpdateSchema →MaintenanceStatusSchema; prune exige autorização específica |
+| POST /api/maintenance/backup | {explicitConfirmation:true} →BackupResultSchema;503 se serviço indisponível |
+| POST /api/extension-telemetry/:id | ExtensionTelemetrySchema; ID instância UUID; métricas sem conteúdo |
+
+Native adiciona MANAGEMENT(input:ManagementRequestSchema), MANAGEMENT_RESULT(result JSON) e MANAGEMENT_FAILURE(code sanitizado), handshake de instância obrigatório, até10 pedidos concorrentes/timeout35s na extensão; rotas fixas no host sem URL arbitrária. HEARTBEAT aceita telemetria opcional para preservar clientes anteriores. Contatos observados e catálogo manual não são misturados no resolvedor de envio legado.

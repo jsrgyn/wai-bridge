@@ -1,0 +1,13 @@
+# ADR 0018 — Reconciliação explícita do diálogo visível
+
+Data: 2026-10-19. Estado: Accepted no escopo solicitado pelo usuário.
+
+A captura por delta não comprova que o banco acompanha a UI: substituição de raízes pode estabelecer baseline indevido; hidratação e citações podem ocultar o corpo atual. Corrigir esses casos com regressões antes de declarar funcionamento. Enquanto ON, reconciliação periódica limitada compara somente mensagens acessíveis desde a observação, sem navegar/rolar ou importar histórico indiscriminado.
+
+Novo comando deliberado MCP whatsapp_sync_dialogue recebe query por contato/grupo/telefone e solicita à API um job persistente e limitado (até50 mensagens renderizadas). Native Messaging entrega o job à extensão ON, independentemente do opt-in de envio. A extensão localiza um único resultado acessível, bloqueia ambiguidade/rascunho/interferência/troca de conta, abre a conversa e captura somente o que estiver renderizado, sem rolar ou carregar histórico. Isso pode alterar o indicador de leitura do próprio WhatsApp; não confirma leitura da IA. Não compõe nem envia mensagens.
+
+API mantém estado REQUESTED/CLAIMED/SUCCEEDED/FAILED/EXPIRED, TTL, idempotência, lease e exclusão mútua com envios. Completion valida conta/identidade/conversa e grava observações usando o mesmo pipeline, em transação com o resultado. Só depois de commit retorna o UUID do diálogo ao MCP. MCP lê a resposta exclusivamente da API/SQLite, com cobertura explícita VISIBLE_RENDERED_ONLY/complete=false; timeout/falha nunca apresenta cache antigo como sincronizado. Reconsulta por ID recupera resultado sem repetir navegação. Observações e revisões preservam deduplicação por referência na sessão; nomes não são identidade global e referências históricas não serão unidas por nome.
+
+Nenhum protocolo privado, sessão/credencial, fonte externa ou serviço adicional. Extensão nunca acessa SQLite. Novos contratos Zod e migration aditiva13 para jobs. Sem envio real em testes; fixtures sintéticas e banco isolado. Ativação manual/revalidação real continuam exigidas após compilar.
+
+Alternativas consideradas: apenas reler SQLite não comprova atualização; somente MutationObserver não recupera raízes/hidratação perdidas; navegar/rolar todas as conversas e unir por nome introduziria coleta indiscriminada e mistura de identidades. Escolhidos delta+comparação periódica limitada e reconciliação explícita por conversa solicitada. Consequências: novos jobs/migration, necessidade de ON/recarga, possibilidade de indicador de leitura do WhatsApp mudar e cobertura ainda parcial; referências de sessão e snapshot não substituem uma fonte integral de eventos suportada.

@@ -28,7 +28,13 @@ destinatário no SQLite. A IA gera a idempotencyKey para o pedido. SUPERVISED é
 padrão; para envio automático autorizado, use AUTO.
 
 ```json
-{"phoneNumber":"+12025550199","text":"Mensagem sintética de exemplo","mode":"AUTO","explicitAuthorization":true,"idempotencyKey":"exemplo-pedido-unico-0001"}
+{
+  "phoneNumber": "+12025550199",
+  "text": "Mensagem sintética de exemplo",
+  "mode": "AUTO",
+  "explicitAuthorization": true,
+  "idempotencyKey": "<CHAVE_IDEMPOTENCIA_SINTETICA>"
+}
 ```
 
 O número acima é sintético, não um destinatário para teste real. O pedido é
@@ -58,7 +64,14 @@ aceita inventar número a partir do nome. Localize a conversa por `contactPhone`
 `whatsapp_list_conversations` e use seu UUID. Exemplo de pedido:
 
 ```json
-{"conversationId":"<UUID cadastrado>","locateByPhone":true,"text":"Mensagem autorizada pelo usuário","mode":"AUTO","explicitAuthorization":true,"idempotencyKey":"<chave única com pelo menos 16 caracteres>"}
+{
+  "conversationId": "<UUID cadastrado>",
+  "locateByPhone": true,
+  "text": "Mensagem autorizada pelo usuário",
+  "mode": "AUTO",
+  "explicitAuthorization": true,
+  "idempotencyKey": "<chave única com pelo menos 16 caracteres>"
+}
 ```
 
 A extensão preenche o campo de pesquisa, exige um resultado visível, abre a conversa
@@ -99,7 +112,13 @@ Essa navegação é um recurso de envio pontual, não captura global (FR-13).
 A ferramenta `whatsapp_send_message` recebe:
 
 ```json
-{"conversationId":"<UUID da conversa vinculada>","text":"Mensagem autorizada pelo usuário","mode":"AUTO","explicitAuthorization":true,"idempotencyKey":"<chave única com pelo menos 16 caracteres>"}
+{
+  "conversationId": "<UUID da conversa vinculada>",
+  "text": "Mensagem autorizada pelo usuário",
+  "mode": "AUTO",
+  "explicitAuthorization": true,
+  "idempotencyKey": "<chave única com pelo menos 16 caracteres>"
+}
 ```
 
 SUPERVISED é o padrão: prepara o texto e aguarda o clique manual em Enviar/Enter.
@@ -159,7 +178,6 @@ nome. O telefone exato no perfil individual continua obrigatório. Lista antiga
 que não concluiu atualização produz SEARCH_RESULTS_NOT_READY; não significa que
 outro destinatário tenha sido identificado. Aguarda estabilidade/indicador busy.
 
-
 ## Resposta e diagnóstico do MCP (ADR 0015)
 
 O background procura as abas existentes de WhatsApp, não somente a aba selecionada
@@ -192,3 +210,17 @@ de AUTO nem permissão para enviar ocultamente. Consultar status/outbox não env
 ### Composição e COMPOSE_FAILED
 
 A extensão insere o texto uma única vez e confere o conteúdo renderizado por até um segundo; retorno booleano de insertText não comprova sucesso/falha do editor. Texto ausente ou divergente bloqueia antes de SENDING. Não há segunda inserção nem limpeza automática de rascunho. Após falha, confira o campo manualmente antes de novo pedido: pode existir texto preparado mesmo sem envio. Recarregue extensão e depois a aba para ativar novo build.
+
+### Diagnóstico de abertura de perfil
+
+`PHONE_CHAT_UNAVAILABLE`: título da conversa não correspondeu ao resultado selecionado no prazo. `PHONE_PROFILE_CONTROL_UNAVAILABLE`: controle visível e único de Dados do perfil/Profile details não encontrado. `PHONE_PROFILE_UNAVAILABLE`: painel não forneceu prova individual/nome correspondente/telefone exato no prazo (também preservado em esperas auxiliares do diretório/fechamento). Controles podem ser button HTML ou role=button. Perfil já verificado é reutilizado sem clique que o feche; telefone divergente e grupos continuam bloqueados. Esses erros não autorizam repetir envio automaticamente.
+
+### Conferência com fechamento do perfil (2026-10-19)
+
+A extensão confirma o número completo, fecha os dados pelo botão Fechar/Close e só depois prepara a mensagem. WAITING_USER deve manter o painel fechado, sem exigir reabertura manual. A prova fica limitada àquela execução/conversa; fechar não é divergência. Trocar conversa ou reabrir com outro número bloqueia. Espaços comuns/Unicode, parênteses e hífens não alteram a comparação; nenhum dígito é acrescentado/removido. Perfil com edição pendente ou Close indisponível bloqueia antes de compor.
+
+Valide com campo vazio e um único pedido SUPERVISED: espere perfil abrir/fechar, confirme texto, aguarde pelo menos21segundos e só então clique Enviar. Primeiro confira estado do pedido anterior; FAILED não deve ser repetido automaticamente. Ao trocar de conversa antes de enviar, o comando deve falhar sem clicar. Testes automatizados usam exclusivamente UI/dados sintéticos.
+
+### Resultado encontrado, conversa não abre
+
+PHONE_CHAT_UNAVAILABLE significa que o cabeçalho não confirmou a conversa selecionada. Logs CHAT_OPEN_STARTED e CHAT_OPENED distinguem acionamento e abertura confirmada; ausência do segundo indica bloqueio antes da conferência do perfil. O adaptador usa a célula acionável do resultado único e um gesto DOM de pressionamento/liberação/clique; não escolhe o primeiro resultado entre contatos ambíguos. Contador de não lidas é separado do nome. USER_INTERFERENCE informa interação durante a localização: aguarde o preparo sem clicar/digitar na busca. Nenhum desses erros autoriza replay automático do pedido.

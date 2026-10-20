@@ -1,0 +1,84 @@
+:root {
+  font: 15px/1.5 system-ui;
+  color: #19332b;
+  background: #eef3f1;
+}
+body {
+  max-width: 1120px;
+  margin: auto;
+  padding: 24px;
+}
+header {
+  padding: 12px;
+}
+h1 {
+  margin-bottom: 0;
+}
+main {
+  display: grid;
+  gap: 20px;
+}
+section {
+  padding: 24px;
+  background: white;
+  border: 1px solid #ccdad4;
+  border-radius: 12px;
+}
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+label:has(input[type='checkbox']) {
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+}
+input,
+select,
+button {
+  font: inherit;
+  padding: 8px;
+  border: 1px solid #a7bbb1;
+  border-radius: 5px;
+}
+button {
+  cursor: pointer;
+  background: #e2f2e9;
+  color: #153c2b;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 420px;
+  overflow: auto;
+  background: #f5f8f6;
+  padding: 12px;
+}
+.card {
+  padding: 12px;
+  border-bottom: 1px solid #dce5df;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#status {
+  min-height: 24px;
+  color: #305d46;
+}
+#status[data-error='true'] {
+  color: #a12727;
+}

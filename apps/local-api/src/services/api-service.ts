@@ -1,4 +1,7 @@
-import {FlowLogRepository} from '@wai-bridge/database';
+import { ContactDirectoryRepository,DialogueSyncBatchRepository } from '@wai-bridge/database';
+import { ConversationReviewRepository } from '@wai-bridge/database';
+import { DialogueSyncRepository } from '@wai-bridge/database';
+import { FlowLogRepository } from '@wai-bridge/database';
 import { ExtensionSendRepository } from '@wai-bridge/database';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -51,17 +54,104 @@ export class ApiService {
   private readonly extensionStates: ExtensionStateRepository;
   private readonly observations: CaptureObservationRepository;
   private readonly eventService: EventService;
-  constructor(private readonly db: Database.Database, cancelOutboxWait:(id:string)=>void=()=>{}) {
+  constructor(
+    private readonly db: Database.Database,
+    cancelOutboxWait: (id: string) => void = () => {},
+  ) {
     this.reads = new ApiReadRepository(db);
     this.commands = new CommandRepository(db);
-    this.outboxRepository=new OutboxRepository(db);
-    this.outboxService=new OutboxService(this.outboxRepository);
-    this.outboxCancellation=new OutboxCancellationService(this.outboxService,cancelOutboxWait);
+    this.outboxRepository = new OutboxRepository(db);
+    this.outboxService = new OutboxService(this.outboxRepository);
+    this.outboxCancellation = new OutboxCancellationService(this.outboxService, cancelOutboxWait);
     this.reading = new AIMessageStateRepository(db);
     this.eventRepository = new EventRepository(db);
     this.extensionStates = new ExtensionStateRepository(db);
     this.observations = new CaptureObservationRepository(db);
     this.eventService = new EventService(db);
+  }
+  listContactDirectory(input:unknown) { return new ContactDirectoryRepository(this.db).list(input); }
+  requestDialogueBatch(input:unknown) { return this.batchOperation(()=>new DialogueSyncBatchRepository(this.db).create(input)); }
+  dialogueBatch(id:string,input:unknown) { return this.batchOperation(()=>new DialogueSyncBatchRepository(this.db).page(id,input)); }
+  cancelDialogueBatch(id:string,input:unknown) { return this.batchOperation(()=>new DialogueSyncBatchRepository(this.db).cancel(id,input)); }
+  resumeDialogueBatch(id:string,input:unknown) { return this.batchOperation(()=>new DialogueSyncBatchRepository(this.db).resume(id,input)); }
+  private batchOperation<T>(run:()=>T):T {
+    try{return run();}catch(error){
+      if(error instanceof Error && error.message.startsWith('BATCH_')){
+        if(error.message==='BATCH_NOT_FOUND'||error.message==='BATCH_TARGET_NOT_FOUND')throw notFound('Batch or selected reference not found');
+        throw conflict(error.message,'Dialogue batch could not be processed');
+      }
+      if(error instanceof Error && error.message==='IDEMPOTENCY_CONFLICT')throw conflict('IDEMPOTENCY_CONFLICT','Request key has different content');
+      throw error;
+    }
+  }
+  listConversationReviews(input: unknown) {
+    return new ConversationReviewRepository(this.db).list(input);
+  }
+  conversationReview(id: string) {
+    return this.reviewOperation(() => new ConversationReviewRepository(this.db).get(id));
+  }
+  acknowledgeConversationReview(id: string, input: unknown) {
+    return this.reviewOperation(() => new ConversationReviewRepository(this.db).acknowledge(id, input));
+  }
+  linkConversationReview(id: string, input: unknown) {
+    return this.reviewOperation(() => new ConversationReviewRepository(this.db).link(id, input));
+  }
+  private reviewOperation<T>(run: () => T): T {
+    try { return run(); } catch (error) {
+      if (error instanceof Error && error.message.startsWith('REVIEW_')) {
+        if (error.message === 'REVIEW_NOT_FOUND') throw notFound('Conversation review not found');
+        throw conflict(error.message, 'Conversation review could not be updated');
+      }
+      throw error;
+    }
+  }
+  requestDialogueSync(input: unknown) {
+    return this.syncOperation(() => new DialogueSyncRepository(this.db).create(input));
+  }
+  dialogueSyncStatus(id: string) {
+    return this.syncOperation(() => new DialogueSyncRepository(this.db).get(id));
+  }
+  dialogueSyncMessages(id: string) {
+    const sync = this.dialogueSyncStatus(id);
+    if (sync.status !== 'SUCCEEDED' || !sync.conversationId)
+      throw conflict('SYNC_NOT_COMPLETED', 'Sync is not committed');
+    const messages = this.reads.messages({
+      conversationId: sync.conversationId,
+      messageIds: sync.messageIds,
+      limit: 50,
+    }) as Array<{ id: string }>;
+    const byId = new Map(messages.map((m) => [m.id, m]));
+    if (sync.messageIds.some((messageId) => !byId.has(messageId)))
+      throw conflict('SYNC_MESSAGES_UNAVAILABLE', 'A synchronized message is no longer available');
+    return { items: sync.messageIds.map((messageId) => byId.get(messageId)!), nextCursor: null };
+  }
+  pollDialogueSync(input: unknown) {
+    return this.syncOperation(()=>{
+      const batches=new DialogueSyncBatchRepository(this.db);batches.advance();
+      const result=new DialogueSyncRepository(this.db).poll(input);
+      if(result.job){const batch=batches.manifest(result.job.id);return {...result,job:{...result.job,...(batch?{batch}:{})}};}
+      return result;
+    });
+  }
+  completeDialogueSync(input: unknown) {
+    return this.syncOperation(() =>
+      new DialogueSyncRepository(this.db).complete(input, (observation, extensionInstanceId) => {
+        this.recordObservation({ observation, extensionInstanceId }, false);
+      }),
+    );
+  }
+  private syncOperation<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('SYNC_')) {
+        if (error.message === 'SYNC_NOT_FOUND') throw notFound('Sync request not found');
+        throw conflict(error.message, 'Dialogue sync could not be completed');
+      }
+      if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT')
+        throw conflict('IDEMPOTENCY_CONFLICT', 'Request key has different content');
+      throw error;
+    }
   }
   status() {
     return {
@@ -75,48 +165,91 @@ export class ApiService {
       ).version,
     };
   }
-  recordExtensionState(input: { extensionInstanceId: string; status: 'CONNECTED' | 'DISCONNECTED'; lastSeenAt: string }) {
+  recordExtensionState(input: {
+    extensionInstanceId: string;
+    status: 'CONNECTED' | 'DISCONNECTED';
+    lastSeenAt: string;
+  }) {
     this.extensionStates.record(input);
     return { recorded: true };
   }
-  recordObservation(input: { extensionInstanceId: string; observation: CaptureObservation }) {
+  recordObservation(input: { extensionInstanceId: string; observation: CaptureObservation }, trackReview = true) {
     try {
       const tx = this.db.transaction(() => {
-        const result = this.observations.record(input.extensionInstanceId, input.observation, (observation) => {
-          const type = observation.observationType === 'CONVERSATION_ACTIVITY'
-            ? 'conversation.detected'
-            : observation.captureState === 'CAPTURED' ? 'message.captured' : 'message.detected';
-          return this.eventService.publish({
-            id: randomUUID(),
-            type,
-            aggregateType: 'capture-observation',
-            aggregateId: observation.observationId,
-            occurredAt: observation.observedAt,
-            payloadVersion: 1,
-            payload: { observationId: observation.observationId, captureState: observation.captureState, observationType: observation.observationType },
-            idempotencyScope: `capture-observation:${input.extensionInstanceId}`,
-            idempotencyKey: observation.observationId,
-          }).event.id;
-        });
-        const normalized = new CaptureNormalizationRepository(this.db).normalize(input.extensionInstanceId, input.observation);
+        const result = this.observations.record(
+          input.extensionInstanceId,
+          input.observation,
+          (observation) => {
+            const type =
+              observation.observationType === 'CONVERSATION_ACTIVITY'
+                ? 'conversation.detected'
+                : observation.captureState === 'CAPTURED'
+                  ? 'message.captured'
+                  : 'message.detected';
+            return this.eventService.publish({
+              id: randomUUID(),
+              type,
+              aggregateType: 'capture-observation',
+              aggregateId: observation.observationId,
+              occurredAt: observation.observedAt,
+              payloadVersion: 1,
+              payload: {
+                observationId: observation.observationId,
+                captureState: observation.captureState,
+                observationType: observation.observationType,
+              },
+              idempotencyScope: `capture-observation:${input.extensionInstanceId}`,
+              idempotencyKey: observation.observationId,
+            }).event.id;
+          },
+        );
+        const normalized = new CaptureNormalizationRepository(this.db).normalize(
+          input.extensionInstanceId,
+          input.observation,
+          trackReview,
+        );
         if (normalized.created && normalized.messageId) {
           this.eventService.publish({
             id: randomUUID(),
-            type: input.observation.captureState === 'CAPTURED' ? 'message.captured' : 'message.detected',
-            aggregateType: 'message', aggregateId: normalized.messageId,
-            occurredAt: input.observation.observedAt, payloadVersion: 1,
-            payload: { observationId: input.observation.observationId, conversationId: normalized.conversationId, identityStatus: input.observation.identity ? 'PARTIAL' : 'UNKNOWN' },
+            type:
+              normalized.status === 'MESSAGE_UPDATED'
+                ? 'message.updated'
+                : input.observation.captureState === 'CAPTURED'
+                  ? 'message.captured'
+                  : 'message.detected',
+            aggregateType: 'message',
+            aggregateId: normalized.messageId,
+            occurredAt: input.observation.observedAt,
+            payloadVersion: 1,
+            payload: {
+              observationId: input.observation.observationId,
+              conversationId: normalized.conversationId,
+              identityStatus: input.observation.identity ? 'PARTIAL' : 'UNKNOWN',
+            },
             idempotencyScope: `normalized-message:${input.extensionInstanceId}`,
             idempotencyKey: input.observation.observationId,
           });
         }
         return { observationId: input.observation.observationId, ...result };
       });
-      const committed=tx.immediate();
-      new FlowLogRepository(this.db).record({traceId:input.observation.observationId,resourceId:input.observation.observationId,component:'SQLITE',phase:'CAPTURE_COMMITTED',outcome:'SUCCEEDED',code:committed.duplicate?'REPLAY':'COMMITTED'});
+      const committed = tx.immediate();
+      new FlowLogRepository(this.db).record({
+        traceId: input.observation.observationId,
+        resourceId: input.observation.observationId,
+        component: 'SQLITE',
+        phase: 'CAPTURE_COMMITTED',
+        outcome: 'SUCCEEDED',
+        code: committed.duplicate ? 'REPLAY' : 'COMMITTED',
+      });
       return committed;
     } catch (error) {
-      if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') throw conflict('IDEMPOTENCY_CONFLICT', 'Observation ID has different content');
+      if (
+        error instanceof Error &&
+        ['CAPTURE_REVISION_CONFLICT', 'CAPTURE_DIRECTION_CONFLICT'].includes(error.message)
+      )
+        throw conflict(error.message, 'Observation revision does not match its original context');
+      if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT')
+        throw conflict('IDEMPOTENCY_CONFLICT', 'Observation ID has different content');
       throw error;
     }
   }
@@ -133,8 +266,8 @@ export class ApiService {
     const items = this.reads.searchContacts(query.q, decodeCursor(query.cursor), query.limit);
     return page(items, query.limit, (x) => String((x as { id: string }).id));
   }
-  conversations(query: PageQuery) {
-    const items = this.reads.conversations(decodeCursor(query.cursor), query.limit);
+  conversations(query: PageQuery & { q?: string | undefined }) {
+    const items = this.reads.conversations(decodeCursor(query.cursor), query.limit, query.q);
     return page(items, query.limit, (x) => String((x as { id: string }).id));
   }
   conversation(id: string) {
@@ -185,18 +318,42 @@ export class ApiService {
     return this.reading.listRecoverable(consumerId, new Date().toISOString(), limit);
   }
   consumerMessageState(messageId: string, consumerId: string) {
-    const current=this.reading.getForConsumer(messageId,consumerId);
-    return current ?? {messageId,consumerId,state:'UNREAD' as const,version:0,leaseUntil:null,lastErrorCode:null};
+    const current = this.reading.getForConsumer(messageId, consumerId);
+    return (
+      current ?? {
+        messageId,
+        consumerId,
+        state: 'UNREAD' as const,
+        version: 0,
+        leaseUntil: null,
+        lastErrorCode: null,
+      }
+    );
   }
   claimForConsumer(messageId: string, consumerId: string, leaseMs: number) {
     return this.reading.claimForConsumer(messageId, consumerId, new Date().toISOString(), leaseMs);
   }
   acknowledgeForConsumer(messageId: string, consumerId: string, claimToken: string) {
-    return this.reading.acknowledgeForConsumer(messageId, consumerId, claimToken, new Date().toISOString());
+    return this.reading.acknowledgeForConsumer(
+      messageId,
+      consumerId,
+      claimToken,
+      new Date().toISOString(),
+    );
   }
   failForConsumer(messageId: string, consumerId: string, claimToken: string, errorCode: string) {
-    this.reading.failForConsumer(messageId, consumerId, claimToken, errorCode, new Date().toISOString());
+    this.reading.failForConsumer(
+      messageId,
+      consumerId,
+      claimToken,
+      errorCode,
+      new Date().toISOString(),
+    );
     return { state: 'FAILED' as const };
+  }
+  captureCoverage(id: string) {
+    this.conversation(id);
+    return this.reads.captureCoverage(id);
   }
   conversationMessages(id: string, query: PageQuery) {
     this.conversation(id);
@@ -252,15 +409,36 @@ export class ApiService {
       throw error;
     }
   }
-  createExtensionRecipientSend(input:unknown,key:string,traceId?:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToName(input,key,traceId));}
-  createExtensionPhoneSend(input:unknown,key:string,traceId?:string) {return this.extensionSendCall(()=>new ExtensionSendRepository(this.db).createToNumber(input,key,undefined,traceId));}
-  createExtensionSend(input: unknown, key: string,traceId?:string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).create(input,key,traceId)); }
-  pollExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).poll(input)); }
-  progressExtensionSend(input: unknown) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).progress(input)); }
-  cancelExtensionSend(id: string) { return this.extensionSendCall(() => new ExtensionSendRepository(this.db).cancel(id)); }
+  createExtensionRecipientSend(input: unknown, key: string, traceId?: string) {
+    return this.extensionSendCall(() =>
+      new ExtensionSendRepository(this.db).createToName(input, key, traceId),
+    );
+  }
+  createExtensionPhoneSend(input: unknown, key: string, traceId?: string) {
+    return this.extensionSendCall(() =>
+      new ExtensionSendRepository(this.db).createToNumber(input, key, undefined, traceId),
+    );
+  }
+  createExtensionSend(input: unknown, key: string, traceId?: string) {
+    return this.extensionSendCall(() =>
+      new ExtensionSendRepository(this.db).create(input, key, traceId),
+    );
+  }
+  pollExtensionSend(input: unknown) {
+    return this.extensionSendCall(() => new ExtensionSendRepository(this.db).poll(input));
+  }
+  progressExtensionSend(input: unknown) {
+    return this.extensionSendCall(() => new ExtensionSendRepository(this.db).progress(input));
+  }
+  cancelExtensionSend(id: string) {
+    return this.extensionSendCall(() => new ExtensionSendRepository(this.db).cancel(id));
+  }
   private extensionSendCall<T>(run: () => T): T {
-    try { return run(); } catch(error) {
-      if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)) throw conflict(error.message,'Extension send request rejected');
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message))
+        throw conflict(error.message, 'Extension send request rejected');
       throw error;
     }
   }
@@ -275,8 +453,8 @@ export class ApiService {
   ) {
     if (!this.reads.contact(input.recipientId)) throw notFound('Contact');
     try {
-      const result=this.outboxService.create(input,'local-api',idempotencyKey);
-      return {inserted:result.inserted,id:result.id,status:result.command.status};
+      const result = this.outboxService.create(input, 'local-api', idempotencyKey);
+      return { inserted: result.inserted, id: result.id, status: result.command.status };
     } catch (error) {
       if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT')
         throw conflict('IDEMPOTENCY_CONFLICT', 'Idempotency key was reused with different content');
@@ -292,19 +470,42 @@ export class ApiService {
     new ExtensionSendRepository(this.db).recover();
     const item = this.commands.get(id);
     if (!item) throw notFound('Command');
-    const command={...(item as Record<string,unknown>)};
-    if(command.kind==='extension-send')delete command.lease_owner;
+    const command = { ...(item as Record<string, unknown>) };
+    if (command.kind === 'extension-send') delete command.lease_owner;
     return { command, history: this.outboxRepository.history(id) };
   }
   cancelOutbox(id: string) {
-    if(this.outboxRepository.get(id)?.kind==='extension-send'){this.cancelExtensionSend(id);return this.outboxItem(id);}
-    try{this.outboxCancellation.cancel(id,'local-api-user');}
-    catch(error){if(error instanceof Error&&error.message==='COMMAND_NOT_FOUND')throw notFound('Command');if(error instanceof Error&&error.message==='OUTBOX_CANNOT_CANCEL')throw conflict('STATE_CONFLICT','Command can no longer be cancelled');if(error instanceof Error&&error.message==='OUTBOX_STATE_CONFLICT')throw conflict('STATE_CONFLICT','Command can no longer be cancelled');throw error;}
+    if (this.outboxRepository.get(id)?.kind === 'extension-send') {
+      this.cancelExtensionSend(id);
+      return this.outboxItem(id);
+    }
+    try {
+      this.outboxCancellation.cancel(id, 'local-api-user');
+    } catch (error) {
+      if (error instanceof Error && error.message === 'COMMAND_NOT_FOUND')
+        throw notFound('Command');
+      if (error instanceof Error && error.message === 'OUTBOX_CANNOT_CANCEL')
+        throw conflict('STATE_CONFLICT', 'Command can no longer be cancelled');
+      if (error instanceof Error && error.message === 'OUTBOX_STATE_CONFLICT')
+        throw conflict('STATE_CONFLICT', 'Command can no longer be cancelled');
+      throw error;
+    }
     return this.outboxItem(id);
   }
-  recordOutboxResult(id:string,result:'SENT'|'UNKNOWN'|'FAILED',evidenceRef?:string){
-    if(this.outboxRepository.get(id)?.kind==='extension-send')throw conflict('EXTENSION_RESULT_REQUIRED','Use the authenticated extension result channel');
-    try{return this.outboxService.recordManualResult(id,result,evidenceRef);}
-    catch(error){if(error instanceof Error&&error.message==='COMMAND_NOT_FOUND')throw notFound('Command');if(error instanceof Error&&['OUTBOX_STATE_CONFLICT','VERIFIED_EVIDENCE_REQUIRED'].includes(error.message))throw conflict('STATE_CONFLICT',error.message);throw error;}
+  recordOutboxResult(id: string, result: 'SENT' | 'UNKNOWN' | 'FAILED', evidenceRef?: string) {
+    if (this.outboxRepository.get(id)?.kind === 'extension-send')
+      throw conflict('EXTENSION_RESULT_REQUIRED', 'Use the authenticated extension result channel');
+    try {
+      return this.outboxService.recordManualResult(id, result, evidenceRef);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'COMMAND_NOT_FOUND')
+        throw notFound('Command');
+      if (
+        error instanceof Error &&
+        ['OUTBOX_STATE_CONFLICT', 'VERIFIED_EVIDENCE_REQUIRED'].includes(error.message)
+      )
+        throw conflict('STATE_CONFLICT', error.message);
+      throw error;
+    }
   }
 }

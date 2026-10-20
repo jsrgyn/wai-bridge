@@ -323,6 +323,8 @@ export class ExtensionSendRepository {
           this.now(),
         );
         if (!input.allowClaim) return { command: null };
+        if (this.db.prepare("SELECT id FROM wa_dialogue_sync_requests WHERE status='CLAIMED' AND expires_at>? LIMIT 1").get(this.now())) return { command: null };
+
         const found = this.db
           .prepare(
             `SELECT id FROM wa_outbox WHERE kind='extension-send' AND status='REQUESTED'

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { build } from 'esbuild';
+import { build, stop } from 'esbuild';
 const bundle = await build({
   stdin: {
     contents: `import {VisibleSendExecutor} from './src/commands/visible-send.ts';import {AutomaticContext} from './src/identity/automatic-context.ts';window.phoneClasses={VisibleSendExecutor,AutomaticContext};`,
@@ -12,6 +12,7 @@ const bundle = await build({
   target: 'chrome120',
 });
 const script = bundle.outputFiles[0]!.text;
+stop();
 import type { VisibleSendExecutor } from '../../src/commands/visible-send.js';
 import type { AutomaticContext } from '../../src/identity/automatic-context.js';
 declare global {
@@ -25,6 +26,7 @@ declare global {
       codes: string[];
       clicks: number;
       profileClicks: number;
+      phases: string[];
       hiddenWrites: boolean;
       searches: string[];
       done: Promise<void>;
@@ -35,9 +37,20 @@ declare global {
 
 for (const scenario of [
   'match',
+  'gridcell-mousedown',
+  'gridcell-unread-label',
+  'directory-press',
+  'header-delay',
+  'no-navigation',
+  'native-profile-button',
+  'unicode-phone',
+  'profile-close-unavailable',
+  'already-verified-profile',
   'direct-number',
   'directory',
   'supervised',
+  'supervised-context-change',
+  'supervised-profile-closed',
   'supervised-hidden',
   'not-found',
   'profile-open',
@@ -56,6 +69,7 @@ for (const scenario of [
   test(`phone search ${scenario} verifies recipient before any synthetic send`, async ({
     page,
   }) => {
+    if (scenario === 'supervised-profile-closed') await page.clock.install();
     await page.route('https://phone.test/**', (route) =>
       route.fulfill({
         contentType: 'text/html',
@@ -73,6 +87,7 @@ for (const scenario of [
         codes: [] as string[],
         clicks: 0,
         profileClicks: 0,
+        phases: [] as string[],
         hiddenWrites: false as boolean,
         searches: [] as string[],
         done: Promise.resolve(),
@@ -111,7 +126,8 @@ for (const scenario of [
         list.replaceChildren();
         if (
           scenario === 'not-found' ||
-          (scenario === 'directory' && !input.closest('[data-testid="new-chat-drawer"]'))
+          (['directory', 'directory-press'].includes(scenario) &&
+            !input.closest('[data-testid="new-chat-drawer"]'))
         )
           return;
         for (let i = 0; i < (scenario === 'ambiguous' ? 2 : 1); i++) {
@@ -120,34 +136,79 @@ for (const scenario of [
             'role',
             input.closest('[data-testid="new-chat-drawer"]') ? 'button' : 'row',
           );
+          if (scenario === 'directory-press') row.tabIndex = 0;
           row.innerHTML =
             '<div data-testid="cell-frame-container"><span data-testid="cell-frame-title">Synthetic result</span><span aria-selected="false"></span></div>';
-          row.querySelector('div')!.addEventListener('click', () => {
+          const needsGridcell = scenario.startsWith('gridcell');
+          if (needsGridcell) {
+            const cell = document.createElement('div');
+            cell.setAttribute('role', 'gridcell');
+            cell.tabIndex = 0;
+            const wrapper = document.createElement('div');
+            wrapper.tabIndex = -1;
+            wrapper.append(...Array.from(row.childNodes));
+            cell.append(wrapper);
+            row.append(cell);
+          }
+          if (scenario === 'gridcell-unread-label')
+            row.querySelector('[data-testid="cell-frame-title"]')!.innerHTML =
+              '<span aria-label="3 mensagens não lidas">3 mensagens não lidas</span><span title="Synthetic result">Synthetic result</span>';
+          const selectionTarget = needsGridcell
+            ? row.querySelector<HTMLElement>('[role="gridcell"]')!
+            : row;
+          const pressOnly = needsGridcell || scenario === 'directory-press';
+          selectionTarget.addEventListener(pressOnly ? 'mousedown' : 'click', (event) => {
+            if (scenario === 'no-navigation') return;
+            if (
+              pressOnly &&
+              (!(event.target instanceof Node && selectionTarget.contains(event.target)) ||
+                document.activeElement !== selectionTarget)
+            )
+              throw new Error('SYNTHETIC_WRONG_SELECTION_TARGET');
             input.closest('[data-testid="new-chat-drawer"]')?.remove();
             row.querySelector('[aria-selected]')!.setAttribute('aria-selected', 'true');
-            document.querySelector(
-              '[data-testid="conversation-info-header-chat-title"]',
-            )!.textContent = 'Synthetic result';
-            const profile = document.createElement('div');
-            profile.setAttribute('role', 'button');
+            const updateHeader = () => {
+              document.querySelector(
+                '[data-testid="conversation-info-header-chat-title"]',
+              )!.textContent = 'Synthetic result';
+            };
+            if (scenario === 'header-delay') setTimeout(updateHeader, 300);
+            else updateHeader();
+            const profile = document.createElement(
+              scenario === 'native-profile-button' ? 'button' : 'div',
+            );
+            if (scenario !== 'native-profile-button') profile.setAttribute('role', 'button');
             profile.setAttribute('aria-label', 'Dados do perfil');
             profile.textContent = 'Synthetic profile';
             profile.addEventListener('click', () => {
               state.profileClicks++;
               const drawer = document.createElement('aside');
               drawer.setAttribute('data-testid', 'chat-info-drawer');
-              drawer.innerHTML = `<div data-testid="${scenario === 'group' ? 'group-info-header' : 'contact-info-header'}">Info</div><span>Synthetic result</span><span id="resolved-phone"></span>`;
+              drawer.innerHTML = `<button aria-label="Fechar">Close synthetic</button><div data-testid="${scenario === 'group' ? 'group-info-header' : 'contact-info-header'}">Info</div><span>Synthetic result</span><span id="resolved-phone"></span>`;
               drawer.querySelector('#resolved-phone')!.textContent =
-                scenario === 'wrong-phone' ? '+12025550124' : '+1 (202) 555-0123';
+                scenario === 'wrong-phone'
+                  ? '+12025550124'
+                  : scenario === 'unicode-phone'
+                    ? '+1\u00a0(202)\u202f555-0123'
+                    : '+1 (202) 555-0123';
+              drawer.querySelector('button')!.addEventListener('click', () => drawer.remove());
+              if (scenario === 'profile-close-unavailable')
+                drawer.querySelector('button')!.remove();
               document.body.append(drawer);
             });
             document.querySelector('header')!.append(profile);
+            if (scenario === 'already-verified-profile') {
+              profile.click();
+              profile.addEventListener('click', () =>
+                document.querySelector('[data-testid="chat-info-drawer"]')?.remove(),
+              );
+            }
           });
           list.append(row);
         }
       };
       input.addEventListener('input', () => onSearch(input));
-      if (scenario === 'directory' || scenario === 'not-found') {
+      if (['directory', 'directory-press', 'not-found'].includes(scenario)) {
         const newChat = document.createElement('button');
         newChat.setAttribute('aria-label', 'Nova conversa');
         newChat.textContent = 'New synthetic chat';
@@ -181,9 +242,21 @@ for (const scenario of [
           }
           state.steps.push(step.step);
           state.codes.push(step.code);
-          if (scenario === 'profile-change' && step.step === 'WAITING_AUTO_SEND')
-            document.querySelector('#resolved-phone')!.textContent = '+12025550124';
+          if (
+            ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
+            document.querySelector('[data-testid="chat-info-drawer"]')
+          )
+            throw new Error('SYNTHETIC_PROFILE_NOT_CLOSED');
+          if (scenario === 'profile-change' && step.step === 'WAITING_AUTO_SEND') {
+            const changed = document.createElement('aside');
+            changed.setAttribute('data-testid', 'chat-info-drawer');
+            changed.innerHTML =
+              '<div data-testid="contact-info-header">Info</div><span>Synthetic result</span><span>+12025550124</span>';
+            document.body.append(changed);
+          }
         },
+        document,
+        (event) => state.phases.push(event.phase),
       );
       executor.setEnabled(true);
       document.querySelector('footer button')!.addEventListener('click', () => {
@@ -238,7 +311,24 @@ for (const scenario of [
       if (scenario === 'supervised-hidden')
         await expect.poll(() => page.evaluate(() => document.hidden)).toBe(false);
       expect(await page.evaluate(() => window.phoneCase.clicks)).toBe(0);
-      await page.getByRole('button', { name: 'Enviar', exact: true }).click();
+      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
+      if (scenario === 'supervised-context-change') {
+        await page.evaluate(() => {
+          document.querySelector(
+            '[data-testid="conversation-info-header-chat-title"]',
+          )!.textContent = 'Different synthetic contact';
+        });
+      } else {
+        if (scenario === 'supervised-profile-closed') {
+          // Several validation ticks must accept absence of the confirmed panel.
+          await expect
+            .poll(() => page.evaluate(() => window.phoneCase.steps.at(-1)))
+            .toBe('WAITING_USER');
+          await page.clock.fastForward(21_000);
+          expect(await page.evaluate(() => window.phoneCase.steps)).toEqual(['WAITING_USER']);
+        }
+        await page.getByRole('button', { name: 'Enviar', exact: true }).click();
+      }
     }
     await page.evaluate(() => window.phoneCase.done);
     const state = await page.evaluate(() => ({
@@ -247,17 +337,26 @@ for (const scenario of [
       clicks: window.phoneCase.clicks,
       searches: window.phoneCase.searches,
       profileClicks: window.phoneCase.profileClicks,
+      phases: window.phoneCase.phases,
       hiddenWrites: window.phoneCase.hiddenWrites,
     }));
     if (
       [
         'match',
+        'gridcell-mousedown',
+        'gridcell-unread-label',
+        'directory-press',
+        'header-delay',
+        'native-profile-button',
+        'unicode-phone',
+        'already-verified-profile',
         'direct-number',
         'profile-open',
         'profile-controls',
         'hidden-start',
         'directory',
         'supervised',
+        'supervised-profile-closed',
         'supervised-hidden',
       ].includes(scenario)
     ) {
@@ -266,16 +365,29 @@ for (const scenario of [
         'SENDING',
         'SENT',
       ]);
+      expect(state.phases.indexOf('CHAT_OPEN_STARTED')).toBeGreaterThanOrEqual(0);
+      expect(state.phases.indexOf('CHAT_OPENED')).toBeGreaterThan(
+        state.phases.indexOf('CHAT_OPEN_STARTED'),
+      );
+      expect(state.phases.indexOf('RECIPIENT_VERIFIED')).toBeGreaterThan(
+        state.phases.indexOf('CHAT_OPENED'),
+      );
       expect(state.hiddenWrites).toBe(false);
       expect(state.clicks).toBe(1);
       expect(state.profileClicks).toBe(1);
       expect(state.searches).toEqual(
-        scenario === 'directory' ? ['+12025550123', '', '+12025550123'] : ['+12025550123', ''],
+        ['directory', 'directory-press'].includes(scenario)
+          ? ['+12025550123', '', '+12025550123']
+          : ['+12025550123', ''],
       );
     } else {
       expect(state.clicks).toBe(0);
       expect(state.steps).not.toContain('SENDING');
       expect(state.steps.at(-1)).toBe('FAILED');
+      if (scenario === 'no-navigation') {
+        expect(state.phases).toContain('CHAT_OPEN_STARTED');
+        expect(state.phases).not.toContain('CHAT_OPENED');
+      }
       if (scenario === 'user-interference')
         await expect(
           page.getByRole('textbox', { name: 'Pesquisar ou começar uma nova conversa' }),
@@ -283,25 +395,36 @@ for (const scenario of [
       expect(state.codes.at(-1)).toBe(
         {
           'not-found': 'PHONE_CONTACT_NOT_FOUND',
+          'no-navigation': 'PHONE_CHAT_UNAVAILABLE',
           'profile-edit': 'PROFILE_HAS_INPUT',
+          'profile-close-unavailable': 'PROFILE_CLOSE_UNAVAILABLE',
           'wrong-phone': 'RECIPIENT_PHONE_MISMATCH',
           ambiguous: 'AMBIGUOUS_PHONE_RESULTS',
           draft: 'COMPOSER_HAS_DRAFT',
           'wrong-account': 'RECIPIENT_ACCOUNT_MISMATCH',
           'search-busy': 'SEARCH_HAS_INPUT',
           'profile-change': 'RECIPIENT_PHONE_MISMATCH',
+          'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
           group: 'RECIPIENT_IS_GROUP',
           'user-interference': 'USER_INTERFERENCE',
         }[
           scenario as Exclude<
             typeof scenario,
             | 'match'
+            | 'gridcell-mousedown'
+            | 'gridcell-unread-label'
+            | 'directory-press'
+            | 'header-delay'
+            | 'native-profile-button'
+            | 'unicode-phone'
+            | 'already-verified-profile'
             | 'direct-number'
             | 'profile-open'
             | 'profile-controls'
             | 'hidden-start'
             | 'directory'
             | 'supervised'
+            | 'supervised-profile-closed'
             | 'supervised-hidden'
           >
         ],

@@ -69,3 +69,13 @@ classificar a lista antiga como ambígua. Sem atualização comprovável retorna
 SEARCH_RESULTS_NOT_READY. Não abrir vários perfis por tentativa nem extrair
 histórico de mensagens dos resultados. A alteração é no adaptador visível, sem
 novo contrato, banco, permissões ou mudança do modo supervisionado.
+
+### Perfil fechado após conferência — 2026-10-19
+
+Após ler o telefone individual completo e normalizado, fechar o painel pelo controle Fechar/Close único. Conservar a prova somente na execução atual, ligada a root DOM, título, conta e contextId. A ausência do painel fechado não constitui divergência. Reabertura com outro telefone/grupo ou painel ilegível bloqueia; mudanças de contexto, conta, root/título, opt-in, lease ou texto continuam bloqueando. Evidência de progresso é a identidade conferida, não inferência por nome. Se fechar o painel invalida um vínculo manual, exigir contexto local atual na mesma conversa antes de continuar. Prova não é persistida como autorização reutilizável e não permite retry.
+
+Telefone é canônico internacional: remover apenas formatação permitida (espaços Unicode, parênteses e hífens), comparar todos os dígitos com DDI; não acrescentar/remover dígitos nem aceitar letras/texto arbitrário ou número parcial. O formato externo canônico +DDI é preservado para compatibilidade da API/SQLite.
+
+### Seleção acionável do resultado — 2026-10-19
+
+Resultado único de contato deve ser acionado dentro de sua própria célula/controle (gridcell/button), focando esse controle e propagando um único gesto DOM comum de pointer/mouse a partir do conteúdo do resultado. click isolado não gera eventos de pressionamento usados por algumas listas. Não acessar handlers privados, não simular isTrusted, não selecionar globalmente o primeiro resultado nem repetir envio. Se houver rerender que desconecte o alvo, interromper o restante do gesto e aguardar a confirmação do cabeçalho; sem confirmação, falhar. Nomes não incluem badge de não lidas; nome renderizado é lido no span identificado quando disponível. Perfil/telefone exato continuam obrigatórios. Eventos CHAT_OPEN_STARTED/CHAT_OPENED distinguem acionamento e confirmação de abertura, sem dados privados.

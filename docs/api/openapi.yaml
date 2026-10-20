@@ -8,6 +8,427 @@ servers:
 security:
   - LocalBearer: []
 paths:
+  /api/contact-catalog:
+    post:
+      summary: Create confirmed local catalog entry
+      description: ContactCreateSchema; 201 ContactCatalogSchema. User-asserted phone never grants send proof.
+      responses:
+        '201': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/contact-catalog/{id}:
+    get:
+      summary: Read editable catalog fields and version
+      description: ContactCatalogSchema; observed contacts start at version zero.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+    patch:
+      summary: Update local fields using ContactUpdateSchema and expectedVersion
+      responses:
+        '200': { description: ContactCatalogSchema with incremented version }
+        '409': { description: CONTACT_VERSION_CONFLICT or IDEMPOTENCY_CONFLICT }
+  /api/reference-candidates:
+    get:
+      summary: List possible duplicate references for explicit review
+      description: CandidateQuerySchema to ReferenceCandidatePageSchema; no history merge.
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/reference-candidates/decisions:
+    post:
+      summary: Confirm LINK or DISMISS decision
+      description: CandidateDecisionSchema; same-account compatible linking only; historiesMerged false.
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/conversation-policies/{id}:
+    get:
+      summary: Read conversation policy
+      description: ConversationPolicySchema.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+    post:
+      summary: Save explicitly confirmed PolicyUpdateSchema without starting a batch
+      responses:
+        '200': { description: ConversationPolicySchema }
+  /api/operations:
+    get:
+      summary: Read local bounded operational summary
+      description: OperationSummarySchema plus runtime status; never starts navigation.
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/dialogue-sync-batches/{id}/report:
+    get:
+      summary: Read paginated batch outcomes and remaining pending count
+      description: DialogueSyncBatchReportSchema; synchronization is not human reading confirmation.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/dialogue-sync-batches/{id}/retry-failed:
+    post:
+      summary: Explicitly create a new batch of failed items only
+      description: RetryBatchFailuresSchema; terminal source batch required; 202 status; idempotent.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/maintenance:
+    get:
+      summary: Read maintenance policy and backup runs
+      description: MaintenanceStatusSchema; last twenty runs.
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+    post:
+      summary: Save MaintenanceUpdateSchema with separate deletion authorization for pruning
+      responses:
+        '200': { description: MaintenanceStatusSchema }
+        '400':
+          { description: Missing explicitConfirmation or authorizeDeletion for enabled pruning }
+  /api/maintenance/backup:
+    post:
+      summary: Create and verify local consistent backup
+      description: explicitConfirmation true required; BackupResultSchema; fixed server path, restore clone validation.
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/extension-telemetry/{id}:
+    post:
+      summary: Record extension diagnostics without message content
+      description: ExtensionTelemetrySchema; bounded capture metrics and optional UI compatibility.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Successful validated operation }
+        '400': { description: Invalid contract or missing literal confirmation }
+        '401': { description: Local bearer token required }
+        '409': { description: Version, identity, idempotency or operation state conflict }
+  /api/contacts/directory:
+    get:
+      summary: Read only registered SQLite contacts with combined name and local registration-date filters
+      description: ContactDirectoryQuerySchema to ContactDirectoryPageSchema. No UI access, inferred relationships or silent deduplication. Explicitly registered relationships are searchable in the catalog overlay. Missing nickname/fullName/phone remain null. Follow nextCursor until null for all rows. Legacy contacts endpoints are preserved.
+      parameters:
+        - { in: query, name: accountId, schema: { type: string, format: uuid } }
+        - { in: query, name: query, schema: { type: string, minLength: 1, maxLength: 256 } }
+        - {
+            in: query,
+            name: match,
+            schema: { type: string, enum: [EXACT, STARTS_WITH, CONTAINS], default: CONTAINS },
+          }
+        - { in: query, name: registeredPeriod, schema: { type: string, enum: [TODAY, YESTERDAY] } }
+        - { in: query, name: registeredOn, schema: { type: string, format: date } }
+        - { in: query, name: registeredFrom, schema: { type: string, format: date } }
+        - { in: query, name: registeredTo, schema: { type: string, format: date } }
+        - { in: query, name: timeZone, schema: { type: string, default: America/Sao_Paulo } }
+        - { in: query, name: cursor, schema: { type: string, format: uuid } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+      responses:
+        '200':
+          {
+            description: 'ContactDirectoryPageSchema; items(id,accountScope,name,nickname,fullName,phone,registeredAt), total, nextCursor, source SQLITE_ONLY, timeZone and UTC boundaries',
+          }
+        '400': { description: Invalid or conflicting calendar/date/zone/search/page contract }
+        '401': { description: Authentication required }
+  /api/dialogue-sync-batches:
+    post:
+      summary: Persist an explicitly authorized sequential pending-conversation batch
+      description: DialogueSyncBatchRequestSchema. ALL_PENDING fixes the current list; SELECTED preserves a unique UUID array. At most5000, one RUNNING globally, one child job at a time, up to50 rendered messages per chat,24h global TTL. Never scrolls, sends or automatically confirms read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [scope, explicitAuthorization, idempotencyKey]
+              properties:
+                scope: { type: string, enum: [ALL_PENDING, SELECTED] }
+                conversationIds:
+                  {
+                    type: array,
+                    minItems: 1,
+                    maxItems: 5000,
+                    uniqueItems: true,
+                    items: { type: string, format: uuid },
+                  }
+                accountId: { type: string, format: uuid }
+                explicitAuthorization: { type: boolean, const: true }
+                idempotencyKey: { type: string, minLength: 16, maxLength: 128 }
+                limitPerConversation: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        '202':
+          {
+            description: DialogueSyncBatchStatusSchema including ID,
+            status,
+            counts,
+            currentPosition and partial coverage,
+          }
+        '400': { description: Invalid contract or missing explicit authorization }
+        '404': { description: Selected reference not found }
+        '409':
+          {
+            description: Busy,
+            ambiguous account,
+            account mismatch,
+            too large or idempotency conflict,
+          }
+  /api/dialogue-sync-batches/{id}:
+    get:
+      summary: Read persisted batch progress and item results without scheduling navigation
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: cursor, schema: { type: integer, minimum: 0, maximum: 4999 } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 20 },
+          }
+      responses:
+        '200':
+          {
+            description: 'DialogueSyncBatchPageSchema; batch, items(position,conversationId,query,status,syncRequestId,attempts,code), nextCursor',
+          }
+        '404': { description: Batch not found }
+  /api/dialogue-sync-batches/{id}/cancel:
+    post:
+      summary: Cancel remaining work and signal active reader without deleting committed snapshots
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [explicitAuthorization]
+              properties:
+                explicitAuthorization: { type: boolean, const: true }
+      responses:
+        '200':
+          {
+            description: DialogueSyncBatchStatusSchema; idempotent cancellation,
+            successes preserved,
+          }
+        '404': { description: Batch not found }
+  /api/dialogue-sync-batches/{id}/resume:
+    post:
+      summary: Explicitly resume paused work with a new run token and no repetition of successes
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [explicitAuthorization]
+              properties:
+                explicitAuthorization: { type: boolean, const: true }
+                retryFailedItem: { type: boolean, default: false }
+      responses:
+        '200':
+          {
+            description: DialogueSyncBatchStatusSchema; retry only explicitly selected failed item,
+            never successes,
+          }
+        '409': { description: Not paused, terminal or another batch running }
+  /api/conversation-reviews:
+    get:
+      summary: List persistent review queue without navigation or read confirmation
+      description: ConversationReviewQuerySchema to ConversationReviewPageSchema. Observed UI signals are not message counts; coverage remains partial. Follow nextCursor for all items.
+      parameters:
+        - { in: query, name: accountId, schema: { type: string, format: uuid } }
+        - { in: query, name: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - {
+            in: query,
+            name: pendingOnly,
+            schema: { type: string, enum: ['true', 'false'], default: 'true' },
+          }
+        - {
+            in: query,
+            name: stage,
+            schema:
+              {
+                type: string,
+                enum:
+                  [
+                    WAITING_SYNC,
+                    SYNC_REQUESTED,
+                    SYNCING,
+                    SYNC_FAILED,
+                    SYNC_EXPIRED,
+                    SYNCED_PARTIAL,
+                    READ_CONFIRMED,
+                  ],
+              },
+          }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+        - { in: query, name: cursor, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          {
+            description: 'ConversationReviewPageSchema with items, total, nextCursor, scope OBSERVED_UI_ONLY and complete=false',
+          }
+        '400': { description: Invalid strict query contract }
+        '401': { description: Authentication required }
+  /api/conversation-reviews/{id}:
+    get:
+      summary: Get current persisted review stage and revisions without navigating
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          {
+            description: ConversationReviewItemSchema including stage,
+            revisions,
+            unread observation,
+            last sync/error and related references,
+          }
+        '404': { description: Unknown review }
+  /api/conversation-reviews/{id}/ack:
+    post:
+      summary: Explicitly acknowledge the latest verified partial snapshot revision
+      description: Requires last successful syncRequestId and current verified revision with no newer signal. Idempotent; never updates per-message AI READ or WhatsApp read indicator.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [syncRequestId, revision, explicitConfirmation]
+              properties:
+                syncRequestId: { type: string, format: uuid }
+                revision: { type: integer, minimum: 1 }
+                explicitConfirmation: { type: boolean, const: true }
+      responses:
+        '200': { description: ConversationReviewItemSchema with READ_CONFIRMED }
+        '400': { description: Invalid contract or missing explicit confirmation }
+        '404': { description: Unknown review }
+        '409': { description: REVIEW_STALE_CONFIRMATION }
+  /api/conversation-reviews/{id}/links:
+    post:
+      summary: Explicitly associate compatible same-account references without merging histories
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [relatedConversationId, explicitConfirmation]
+              properties:
+                relatedConversationId: { type: string, format: uuid }
+                explicitConfirmation: { type: boolean, const: true }
+      responses:
+        '200':
+          {
+            description: 'conversationId, relatedConversationId, linked=true, historiesMerged=false',
+          }
+        '400': { description: Invalid contract or missing explicit confirmation }
+        '404': { description: Unknown reference }
+        '409': { description: REVIEW_IDENTITY_CONFLICT }
+  /api/dialogue-sync:
+    post:
+      summary: Persist a bounded visible dialogue reconciliation request
+      description: DialogueSyncRequestSchema; query, optional accountId and conversationId (bind selected pending reference), limit 1..50 (default50), idempotencyKey. TTL30s; monitor ON and one compatible tab required for execution. Never sends or scrolls history.
+      responses:
+        '202':
+          description: DialogueSyncResultSchema; state, conversationId, ordered messageIds, counts, code, timestamps, truncated, scope VISIBLE_RENDERED_ONLY, complete=false
+        '409':
+          description: Idempotency conflict or queue full
+  /api/dialogue-sync/{id}:
+    get:
+      summary: Read persisted synchronization status
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: DialogueSyncResultSchema; pending/failed does not imply freshness
+        '404':
+          description: Unknown synchronization request
+  /api/dialogue-sync/{id}/messages:
+    get:
+      summary: Read committed snapshot messages in rendered UI order
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Persisted message items in snapshot order; nextCursor=null
+        '409':
+          description: Sync not successful or messages unavailable
+  /api/extension/dialogue-sync/poll:
+    post:
+      summary: Native host preflights or claims one requested dialogue check
+      description: DialogueSyncPollSchema; extensionInstanceId, ready, optional accountId. Claim requires ready/accountId and unoccupied UI; no send permission required. Optional activeRequestId plus leaseToken checks cancellation of an exact instance/account/lease; result can contain cancelRequestId. Batch jobs carry a validated UUID array, position, total and runToken.
+      responses:
+        '200':
+          description: DialogueSyncPollResultSchema; pending and job/null
+  /api/extension/dialogue-sync/complete:
+    post:
+      summary: Atomically persist validated rendered observations and sync result
+      description: DialogueSyncCompletionSchema; instance, requestId, leaseToken, code, identity and conversationLabel on OK, observations max50, truncated. HTTP limit4MiB. Account/context mismatch reverts snapshot; completed replay is idempotent.
+      responses:
+        '200':
+          description: Committed DialogueSyncResultSchema; SUCCEEDED or FAILED
+        '409':
+          description: Lease, account, target, revision or context conflict
+  /api/conversations/{id}/capture-coverage:
+    get:
+      summary: Observed UI coverage and bounded recent activity signals
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: CaptureCoverageSchema; complete=false, counts, recentActivity (max20), unavailable text/media and timestamps. Activity signals are not messages.
+        '404':
+          description: Unknown conversation
   /api/diagnostics/logs:
     get:
       summary: Query bounded correlated operational logs (FlowLogQuerySchema)
@@ -114,7 +535,12 @@ paths:
   /api/conversations:
     get:
       parameters:
-        [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - in: query
+          name: q
+          schema: { type: string, minLength: 2, maxLength: 100 }
+          description: Optional literal title substring; does not merge identities.
       responses: { '200': { description: Cursor-paginated conversations } }
   /api/conversations/{id}:
     get:
@@ -578,11 +1004,26 @@ components:
           type: array
           maxItems: 16
           items: { type: string, enum: [IMAGE, AUDIO, VIDEO, DOCUMENT, UNKNOWN] }
+        activity:
+          type: object
+          additionalProperties: false
+          required: [unreadCount, reason]
+          properties:
+            unreadCount: { type: [integer, 'null'], minimum: 0 }
+            reason: { type: string, enum: [INITIAL_UNREAD, ROW_CHANGED, UNREAD_DECREASED] }
         identity: { $ref: '#/components/schemas/ConversationIdentity' }
+        messageRef:
+          type: object
+          additionalProperties: false
+          required: [key, revision, firstObservedAt]
+          description: Optional local reference for MESSAGE only; firstObservedAt must not be after observedAt.
+          properties:
+            key: { type: string, format: uuid }
+            revision: { type: integer, minimum: 1, maximum: 1000000 }
+            firstObservedAt: { type: string, format: date-time }
     ConversationIdentity:
       description: >-
-        Experimental local reference, manually confirmed or automatically observed. Requires a MESSAGE observation
-        with matching conversation kind and confirmedAt not later than observedAt.
+        Experimental local reference, manually confirmed or automatically observed. Requires matching conversation kind (CONVERSATION_ACTIVITY accepts UI_CONTEXT only) and confirmedAt not later than observedAt.
         PHONE is an observed profile number; GROUP_LOCAL is a user-assigned UUID,
         not an official WhatsApp group ID. UI_CONTEXT uses an ephemeral local UUID and VISIBLE_UI evidence. confirmedAt then means observation time, not human confirmation. No source alone authorizes sending.
       oneOf:

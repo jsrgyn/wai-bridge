@@ -27,7 +27,7 @@ Também existem `traceId`, `component`, `level` e `beforeSequence`. O retorno tr
 | NATIVE_HOST          | encaminhamento da captura, ACK, comando recebido, conexão                               |
 | EXTENSION_BACKGROUND | captura enfileirada, ponte pronta/bloqueada, comando aceito                             |
 | EXTENSION_CONTENT    | execução aceita no conteúdo da aba                                                      |
-| WHATSAPP_UI          | mensagem observada, busca e conferência do destinatário, composição, espera, envio/erro |
+| WHATSAPP_UI          | mensagem observada, busca, CHAT_OPEN_STARTED/CHAT_OPENED, conferência do destinatário, composição, espera, envio/erro |
 
 Captura usa o UUID da observação como trace e recurso. Envio usa um trace propagado entre as camadas e o UUID do comando como recurso. Consulta posterior de mensagens registra `CAPTURE_READ`, com referência ao trace da consulta. Isso não altera o estado de leitura do WhatsApp.
 
@@ -40,3 +40,5 @@ Eventos usam contrato Zod estrito com enums: IDs, camada, etapa, resultado, cód
 Filas de diagnóstico são independentes das filas de negócio: até 200 eventos, lotes de 50, envio assíncrono. Falha de logging não autoriza repetir envio nem muda seu estado. A fila da extensão persiste em storage local; filas MCP/native são em memória. Sob indisponibilidade/limite pode haver perda de diagnóstico. Não há importação retroativa de logs nem histórico de mensagens.
 
 SQLite schema11 adiciona `wa_flow_logs` e `wa_outbox.flow_trace_id`. Retenção: sete dias, máximo 20 mil registros, limpeza na gravação; consultas já ocultam expirados. Essa política não remove mensagens nem auditoria. A API é a única dona do SQLite. HTTP autenticado: `POST /api/diagnostics/logs` recebe `{events:[...]}`; `GET /api/diagnostics/logs` aceita os filtros acima. Ambos exigem o Bearer local existente; nunca publique esse token.
+
+Conferência sob demanda: fases SYNC_REQUESTED/SYNC_CLAIMED/SYNC_COMPLETED usam o UUID do job como traceId/resourceId. Commits de observações do snapshot mantêm observationId e relatedTraceId do job. Native completion propaga x-wai-trace-id do job. Consulte whatsapp_get_sync_status para resultado autoritativo; logs são best effort, não prova independente de atualização integral. Nenhum corpo/nome/telefone/lease entra no fluxo de diagnóstico.

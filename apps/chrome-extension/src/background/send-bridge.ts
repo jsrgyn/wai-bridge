@@ -51,6 +51,9 @@ export class ExtensionSendBridge {
     private readonly windows?: Pick<typeof chrome.windows, 'update'>,
     private readonly logs?: FlowLogSink,
   ) {}
+  get busy(): boolean {
+    return Boolean(this.active) || this.polling;
+  }
   connect(port: Port): void {
     this.port = port;
   }

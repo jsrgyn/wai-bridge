@@ -6,6 +6,7 @@ import { build, context } from 'esbuild';
 const out = new URL('../dist/', import.meta.url);
 const watch = process.argv.includes('--watch');
 const entries = {
+  dashboard:new URL('../src/dashboard/dashboard.ts',import.meta.url).pathname,
   'service-worker': new URL('../src/background/service-worker.ts', import.meta.url).pathname,
   'content-script': new URL('../src/content/content-script.ts', import.meta.url).pathname,
   popup: new URL('../src/popup/popup.ts', import.meta.url).pathname,
@@ -19,6 +20,9 @@ await cp(new URL('../src/popup/popup.html', import.meta.url), new URL('popup.htm
 await cp(new URL('../src/popup/popup.css', import.meta.url), new URL('popup.css', out));
 await cp(new URL('../src/options/options.html', import.meta.url), new URL('options.html', out));
 await cp(new URL('../src/options/options.css', import.meta.url), new URL('options.css', out));
+
+await cp(new URL('../src/dashboard/dashboard.html',import.meta.url),new URL('dashboard.html',out));
+await cp(new URL('../src/dashboard/dashboard.css',import.meta.url),new URL('dashboard.css',out));
 
 const options = { define:{__WAI_BUILD_ID__:JSON.stringify(new Date().toISOString())}, entryPoints: entries, outdir: out.pathname, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120' };
 if (watch) {

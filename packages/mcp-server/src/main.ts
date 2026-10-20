@@ -1,3 +1,4 @@
+import { parsePermissions } from './permissions.js';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { LocalApiClient } from './client.js';
 import { createMcpServer } from './server.js';
@@ -15,6 +16,9 @@ const api = new LocalApiClient({
 const handle = serveStdio(() =>
   createMcpServer({
     api,
+    ...(process.env.WAI_MCP_PERMISSIONS !== undefined
+      ? { permissions: parsePermissions(process.env.WAI_MCP_PERMISSIONS)! }
+      : {}),
     allowWrites: process.env.WAI_MCP_ALLOW_WRITES === 'true',
     allowExtensionSends: process.env.WAI_MCP_ALLOW_EXTENSION_SENDS === 'true',
   }),

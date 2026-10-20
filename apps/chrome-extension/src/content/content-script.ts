@@ -1,3 +1,7 @@
+import {uiCompatibility} from '../adapters/ui-compatibility.js';
+import { DialogueSyncCodeSchema } from '@wai-bridge/shared';
+import { VisibleDialogueSync } from '../commands/dialogue-sync.js';
+import { WhatsAppDomAdapter } from '../adapters/dom-adapter.js';
 import { emitFlow, type FlowLogSink } from '@wai-bridge/shared';
 import { extensionBuild } from '../build-info.js';
 import { ContentRuntimeClient } from '../messaging/content-runtime.js';
@@ -61,6 +65,12 @@ const senderExecutor = new VisibleSendExecutor(
 let observer: MonitorObserver | undefined;
 let monitoring = false;
 let explicitControl = false;
+let synchronizing = false;
+let activeSync: {requestId:string;cancelled:boolean}|undefined;
+let batchSession: {id:string;runToken:string;interfered:boolean}|undefined;
+for (const type of ['pointerdown','keydown','input','wheel']) document.addEventListener(type,event=>{
+  if(event.isTrusted && batchSession && runtimeClient.isValid()) batchSession.interfered=true;
+},true);
 let executingId: string | undefined;
 
 function reportError(message: string): void {
@@ -122,6 +132,97 @@ const onMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
     respond({ ok: false, error: 'UNAUTHORIZED_SENDER' });
     return;
   }
+  if(parsed.data.kind==='GET_COMPATIBILITY'){respond({ok:true,compatibility:uiCompatibility(document)});return;}
+  if (parsed.data.kind === 'GET_SYNC_CONTEXT') {
+    respond({
+      ok: true,
+      monitoring,
+      build: extensionBuild,
+      compatibility:uiCompatibility(document),
+      accountId: automaticContext?.localAccountId,
+      ready: monitoring && !document.hidden && !executingId && !synchronizing,
+    });
+    return;
+  }
+  if (parsed.data.kind === 'SYNC_CANCEL') {
+    if(activeSync?.requestId===parsed.data.requestId)activeSync.cancelled=true;
+    respond({ok:true});return;
+  }
+  if (parsed.data.kind === 'SYNC_DIALOGUE') {
+    if (!monitoring || !observer || executingId || synchronizing) {
+      respond({ code: 'MONITOR_OFF', observations: [], truncated: false });
+      return;
+    }
+    synchronizing = true;
+    let syncInterfered = false;
+    const syncUserInput = (event: Event) => { if (event.isTrusted) syncInterfered = true; };
+    for (const type of ['pointerdown','keydown','input','wheel']) document.addEventListener(type,syncUserInput,true);
+    const job = parsed.data.job;
+    const cancellation={requestId:job.id,cancelled:false};activeSync=cancellation;
+    if(job.batch && batchSession?.runToken!==job.batch.runToken)
+      batchSession={id:job.batch.id,runToken:job.batch.runToken,interfered:false};
+    const gate = () => {
+      if(cancellation.cancelled)throw new Error('CANCELLED');
+      if (syncInterfered || (job.batch && batchSession?.interfered)) throw new Error('USER_INTERFERENCE');
+      if ([...document.querySelectorAll('#main footer [contenteditable="true"]')].some(e=>e.textContent?.trim())) throw new Error('COMPOSER_HAS_DRAFT');
+      if (!runtimeClient.isValid() || !monitoring || !observer) throw new Error('MONITOR_OFF');
+      if (document.hidden) throw new Error('TAB_HIDDEN');
+      if (Date.now() >= Date.parse(job.expiresAt)) throw new Error('TIMEOUT');
+      if (automaticContext?.localAccountId !== job.accountId) throw new Error('ACCOUNT_MISMATCH');
+    };
+    void (async () => {
+      try {
+        const root = await new VisibleDialogueSync(document, currentIdentity).locate(job, gate);
+        gate();
+        const label = new ContactDetector().conversationLabel(root);
+        const selected = document.querySelector('#pane-side [aria-selected="true"]');
+        // Allow the normal UI hydration to settle without scrolling/importing history.
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        gate();
+        if (
+          !root.isConnected ||
+          new ContactDetector().conversationLabel(root) !== label ||
+          document.querySelector('#pane-side [aria-selected="true"]') !== selected
+        )
+          throw new Error('CONTEXT_CHANGED');
+        if(!uiCompatibility(document).canCapture)throw new Error('UI_UNSUPPORTED');
+        const total = new WhatsAppDomAdapter().findNewMessages(root).length;
+        const observations = observer!
+          .reconcile(root, job.limit)
+          .map((observation) =>
+            identityContext.current()
+              ? identityContext.enrich(observation, root)
+              : (automaticContext?.enrich(observation, root) ?? observation),
+          );
+        const identity = currentIdentity();
+        if (!identity || !label || identity.accountId !== job.accountId)
+          throw new Error('CONTEXT_CHANGED');
+        // Snapshot observations commit exclusively through SYNC_COMPLETE, atomically with the job.
+        // Publishing them as live notifications would create artificial unread signals and bypass rollback.
+        respond({
+          code: 'OK',
+          identity,
+          conversationLabel: label,
+          observations,
+          truncated: total > job.limit,
+        });
+      } catch (error) {
+        const parsedCode = DialogueSyncCodeSchema.safeParse(
+          error instanceof Error ? error.message : 'SYNC_FAILED',
+        );
+        respond({
+          code: parsedCode.success ? parsedCode.data : 'SYNC_FAILED',
+          observations: [],
+          truncated: false,
+        });
+      } finally {
+        for (const type of ['pointerdown','keydown','input','wheel']) document.removeEventListener(type,syncUserInput,true);
+        activeSync=undefined;
+        synchronizing = false;
+      }
+    })();
+    return true;
+  }
   if (parsed.data.kind === 'SEND_CONTEXT') {
     senderExecutor.setEnabled(parsed.data.enabled && monitoring);
     const root = document.querySelector<HTMLElement>('#main');
@@ -130,6 +231,7 @@ const onMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
       ok: true,
       ready: monitoring && !document.hidden,
       build: extensionBuild,
+      compatibility:uiCompatibility(document),
       ...(identity
         ? {
             identity,
@@ -145,7 +247,7 @@ const onMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
     return;
   }
   if (parsed.data.kind === 'SEND_EXECUTE') {
-    if (!monitoring || executingId) {
+    if (!monitoring || executingId || synchronizing) {
       respond({ ok: false });
       return;
     }
@@ -205,16 +307,30 @@ try {
 }
 
 function setMonitoring(enabled: boolean): void {
+  if(!enabled && batchSession)batchSession.interfered=true;
   monitoring = enabled;
   if (monitoring && !observer) {
     observer = new MonitorObserver(
       (observation, root) =>
         publishObservation(
-          identityContext.current()
-            ? identityContext.enrich(observation, root)
-            : (automaticContext?.enrich(observation, root) ?? observation),
+          observation.observationType === 'CONVERSATION_ACTIVITY'
+            ? (automaticContext?.enrich(observation, root) ?? observation)
+            : identityContext.current()
+              ? identityContext.enrich(observation, root)
+              : (automaticContext?.enrich(observation, root) ?? observation),
         ),
       reportError,
+      () => {
+        const identity = currentIdentity();
+        if (!identity) return undefined;
+        const key =
+          identity.type === 'PHONE'
+            ? identity.phone
+            : identity.type === 'UI_CONTEXT'
+              ? identity.conversationKey
+              : identity.groupId;
+        return `${identity.accountId}:${identity.type}:${key}`;
+      },
     );
     observer.start();
   } else if (!monitoring) {

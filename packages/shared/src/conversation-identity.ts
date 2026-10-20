@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 export function normalizeProfilePhone(value: string): string | null {
-  if (!/^\+[\d ()-]+$/.test(value.trim())) return null;
-  const phone = value.trim().replace(/[ ()-]/g, '');
+  if (!/^\+[\d\s()-]+$/u.test(value.trim())) return null;
+  const phone = value.trim().replace(/[\s()-]/gu, '');
   return /^\+[1-9]\d{7,14}$/.test(phone) ? phone : null;
 }
 

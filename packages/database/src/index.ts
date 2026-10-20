@@ -17,3 +17,11 @@ export { ApiReadRepository } from './repositories/api-read.js';
 export { ExtensionSendRepository } from './repositories/extension-send.js';
 
 export {FlowLogRepository} from './repositories/flow-logs.js';
+export { DialogueSyncRepository } from './repositories/dialogue-sync.js';
+export { ConversationReviewRepository } from './repositories/conversation-review.js';
+export { ContactDirectoryRepository } from './repositories/contact-directory.js';
+export { DialogueSyncBatchRepository } from './repositories/dialogue-sync-batch.js';
+
+export {OperationsRepository} from './repositories/operations.js';
+
+export {MaintenanceService,verifyRestoredBackup} from './maintenance.js';

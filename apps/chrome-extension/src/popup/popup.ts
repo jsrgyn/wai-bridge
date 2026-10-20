@@ -20,7 +20,7 @@ function render(state: unknown): void {
       : value.captureContext === 'NOT_WHATSAPP'
         ? 'Abra a aba do WhatsApp Web.'
         : value.captureContext === 'ACTIVE_CONVERSATION'
-          ? value.monitoring ? 'Observando mensagens novas da conversa aberta. Histórico anterior não é importado.' : 'Monitor parado nesta aba. Clique em Start monitoring para observar mensagens novas.'
+          ? value.monitoring ? 'Observando mensagens, alterações e anexos visíveis da conversa aberta. A lista registra atividades; a cobertura não é completa.' : 'Monitor parado nesta aba. Clique em Start monitoring para observar mensagens novas.'
           : '';
   if (stateLabel) stateLabel.textContent = `Monitoring: ${value.monitoring ? 'on' : 'off'}`;
   if (connectionLabel) connectionLabel.textContent = `Local agent: ${value.connection.toLowerCase()}`;

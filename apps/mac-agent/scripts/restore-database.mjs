@@ -7,7 +7,7 @@ const source=resolve(process.argv[2]??'');
 const target=resolve(process.argv[3]??'');
 const backupDir=resolve(process.argv[4]??'');
 if(!process.argv[2]||!process.argv[3]||!process.argv[4]||source===target)throw new Error('Usage: restore-database.mjs <source> <target> <backup-directory>');
-function validate(path){const db=new Database(path,{readonly:true,fileMustExist:true});try{if(db.pragma('integrity_check',{simple:true})!=='ok')throw new Error('DATABASE_INTEGRITY_CHECK_FAILED');const version=db.prepare('SELECT MAX(version) AS version FROM wa_schema_migrations').get()?.version;if(typeof version!=='number'||version<1||version>11)throw new Error('DATABASE_SCHEMA_UNSUPPORTED');}finally{db.close();}}
+function validate(path){const db=new Database(path,{readonly:true,fileMustExist:true});try{if(db.pragma('integrity_check',{simple:true})!=='ok')throw new Error('DATABASE_INTEGRITY_CHECK_FAILED');const version=db.prepare('SELECT MAX(version) AS version FROM wa_schema_migrations').get()?.version;if(typeof version!=='number'||version<1||version>16)throw new Error('DATABASE_SCHEMA_UNSUPPORTED');}finally{db.close();}}
 validate(source);
 await mkdir(backupDir,{recursive:true,mode:0o700});
 await mkdir(dirname(target),{recursive:true,mode:0o700});

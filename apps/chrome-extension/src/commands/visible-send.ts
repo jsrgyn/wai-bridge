@@ -1,4 +1,5 @@
-import { emitFlow, flowCode, type FlowLogSink } from '@wai-bridge/shared';
+import {uiCompatibility} from '../adapters/ui-compatibility.js';
+import { emitFlow, flowCode, normalizeProfilePhone, type FlowLogSink } from '@wai-bridge/shared';
 import {
   ExtensionSendCommandSchema,
   sendTarget,
@@ -7,7 +8,7 @@ import {
 } from '@wai-bridge/shared';
 import type { ConversationIdentity } from '@wai-bridge/shared';
 import { WhatsAppDomAdapter } from '../adapters/dom-adapter.js';
-import { PhoneSearch } from './phone-search.js';
+import { PhoneSearch, isVisible, type ResolvedPhoneRecipient } from './phone-search.js';
 import { visiblePeerDetails } from '../identity/visible-peer-details.js';
 import { messageText } from '../adapters/message-text.js';
 
@@ -17,7 +18,7 @@ type Step = Omit<
 >;
 export class VisibleSendExecutor {
   private enabled = false;
-  private resolved: { root: HTMLElement; contextId: string } | undefined;
+  private resolved: ResolvedPhoneRecipient | undefined;
   private active: AbortController | undefined;
   private readonly attempted = new Set<string>();
   constructor(
@@ -82,7 +83,16 @@ export class VisibleSendExecutor {
         });
         label.textContent = 'WAI Bridge: pesquisando e conferindo o telefone do contato.';
         this.doc.body.append(box);
-        search = new PhoneSearch(this.doc, this.identity);
+        search = new PhoneSearch(this.doc, this.identity, (phase) =>
+          emitFlow(this.logs, {
+            traceId: command.traceId ?? command.id,
+            resourceId: command.id,
+            component: 'WHATSAPP_UI',
+            phase,
+            outcome: phase === 'CHAT_OPENED' ? 'SUCCEEDED' : 'STARTED',
+            code: phase === 'CHAT_OPENED' ? 'OK' : 'STARTED',
+          }),
+        );
         this.resolved = await search.resolve(
           command.recipientPhone!,
           command.target.accountId,
@@ -219,21 +229,43 @@ export class VisibleSendExecutor {
       const label = this.resolved?.root
         .querySelector('[data-testid="conversation-info-header-chat-title"]')
         ?.textContent?.trim();
+      const details =
+        label && label === this.resolved?.label ? visiblePeerDetails(this.doc, label) : undefined;
+      if (details?.kind === 'GROUP' || (details?.phone && details.phone !== this.resolved?.phone))
+        throw new Error('RECIPIENT_PHONE_MISMATCH');
       if (
         !current ||
         current.accountId !== command.target.accountId ||
         current.contextId !== this.resolved?.contextId ||
         !label ||
-        visiblePeerDetails(this.doc, label).phone !== command.recipientPhone ||
+        label !== this.resolved?.label ||
+        this.resolved?.phone !== normalizeProfilePhone(command.recipientPhone!) ||
         this.doc.querySelector('#main') !== this.resolved.root
       )
+        throw new Error('RECIPIENT_CONTEXT_MISMATCH');
+      const verifiedDetails = details!;
+      if (
+        verifiedDetails.kind === 'GROUP' ||
+        (verifiedDetails.phone && verifiedDetails.phone !== this.resolved.phone) ||
+        ('phone' in current &&
+          current.phone &&
+          normalizeProfilePhone(current.phone) !== this.resolved.phone)
+      )
         throw new Error('RECIPIENT_PHONE_MISMATCH');
+      // Absence of a closed profile is not a changed number. An open but
+      // unreadable profile must still block; never silently reuse stale proof.
+      if (
+        [...this.doc.querySelectorAll('[data-testid="chat-info-drawer"]')].some(isVisible) &&
+        !verifiedDetails.phone
+      )
+        throw new Error('PHONE_PROFILE_UNAVAILABLE');
     } else if (
       !current ||
       current.contextId !== command.contextId ||
       JSON.stringify(sendTarget(current)) !== JSON.stringify(command.target)
     )
       throw new Error('RECIPIENT_CONTEXT_MISMATCH');
+    if(uiCompatibility(this.doc).reasons.includes('AMBIGUOUS_STRUCTURE'))throw new Error('CONVERSATION_UNAVAILABLE');
     const roots = this.doc.querySelectorAll<HTMLElement>('#main');
     if (roots.length !== 1) throw new Error('CONVERSATION_UNAVAILABLE');
     return roots[0]!;
@@ -242,7 +274,7 @@ export class VisibleSendExecutor {
     if (!command.locateByPhone) return {};
     this.validate(command);
     return {
-      resolvedIdentity: this.identity.current()!,
+      resolvedIdentity: this.resolved!.identity,
       conversationLabel: this.resolved!.root.querySelector(
         '[data-testid="conversation-info-header-chat-title"]',
       )!.textContent!.trim(),

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { build } from 'esbuild';
+import { build, stop } from 'esbuild';
 const bundle = await build({
   stdin: {
     contents: `import {PhoneSearch} from './src/commands/phone-search.ts';import {AutomaticContext} from './src/identity/automatic-context.ts';window.resultClasses={PhoneSearch,AutomaticContext};`,
@@ -11,6 +11,7 @@ const bundle = await build({
   platform: 'browser',
   target: 'chrome120',
 });
+stop();
 import type { PhoneSearch } from '../../src/commands/phone-search.js';
 import type { AutomaticContext } from '../../src/identity/automatic-context.js';
 declare global {
@@ -75,9 +76,10 @@ for (const scenario of [
         const drawer = document.createElement('aside');
         drawer.setAttribute('data-testid', 'chat-info-drawer');
         drawer.innerHTML =
-          '<div data-testid="contact-info-header">Info</div><span>Synthetic recipient</span><span></span>';
+          '<button aria-label="Fechar">Close synthetic</button><div data-testid="contact-info-header">Info</div><span>Synthetic recipient</span><span></span>';
         drawer.lastElementChild!.textContent =
           scenario === 'wrong-phone' ? '+12025550198' : '+12025550199';
+        drawer.querySelector('button')!.addEventListener('click', () => drawer.remove());
         document.body.append(drawer);
       });
       document.querySelector('input')!.addEventListener('input', (event) => {

@@ -1,5 +1,11 @@
-# Stack técnica
+# Stack técnica verificada
 
-Stack alvo: TypeScript strict, pnpm Workspaces, Chrome Extension Manifest V3, Node.js LTS no macOS Apple Silicon, Fastify, SQLite via better-sqlite3, Zod, WebSocket, MCP TypeScript SDK v2, Vitest, Playwright, ESLint, Prettier e Pino.
+- Monorepo TypeScript strict com pnpm workspaces.
+- Extensão Chrome Manifest V3, content script isolado, service worker e páginas popup/options/dashboard.
+- Agente Native Messaging para macOS; API local Fastify sobre HTTP loopback.
+- SQLite via better-sqlite3 e migrations aditivas; contratos de fronteira validados com Zod.
+- Servidor MCP TypeScript SDK v2 por stdio, cliente HTTP restrito a localhost.
+- Vitest para unitários/integração; Playwright para cenários de navegador sintéticos; ESLint e TypeScript para análise estática.
+- Builds de TypeScript via `tsc -b`; build da extensão via esbuild e empacotamento em `apps/chrome-extension/dist/`.
 
-No bootstrap, somente ferramentas de desenvolvimento necessárias foram adicionadas ao manifesto raiz. A lista de tecnologias alvo não significa que dependências de runtime já estejam instaladas ou usadas. Verifique compatibilidade e versões estáveis antes de adicionar ou atualizar dependências; respeite `packageManager`, `engines` e arquivos de lock.
+Versões e limites de engine devem ser conferidos em `package.json`, manifests dos workspaces e lockfile, que são a fonte de verdade. Não inferir suporte para qualquer runtime/plataforma além dos requisitos documentados. O agente Native Messaging e os scripts de instalação são específicos para macOS; testes Playwright atuais apontam para Google Chrome no caminho configurado em `apps/chrome-extension/playwright.config.ts`.

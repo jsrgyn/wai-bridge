@@ -1,3 +1,10 @@
+import { managementRoute, ExtensionTelemetrySchema } from '@wai-bridge/shared';
+import {
+  DialogueSyncPollSchema,
+  DialogueSyncPollResultSchema,
+  DialogueSyncCompletionSchema,
+  DialogueSyncResultSchema,
+} from '@wai-bridge/shared';
 import { z } from 'zod';
 import { BufferedFlowReporter, emitFlow, flowCode, type FlowLogInput } from '@wai-bridge/shared';
 import {
@@ -50,6 +57,70 @@ export class LocalApiClient {
       .parse(await response.json());
   }
 
+  async management(raw: unknown) {
+    const route = managementRoute(raw);
+    const response = await this.request(`${this.config.apiOrigin}${route.path}`, {
+      method: route.method,
+      headers: {
+        authorization: `Bearer ${this.config.apiToken}`,
+        'content-type': 'application/json',
+      },
+      ...(route.body ? { body: JSON.stringify(route.body) } : {}),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as {
+        error?: { code?: string };
+      } | null;
+      throw Error(data?.error?.code?.match(/^[A-Z_]+$/) ? data.error.code : 'MANAGEMENT_FAILED');
+    }
+    return z.json().parse(await response.json());
+  }
+  async telemetry(id: string, raw: unknown) {
+    const input = ExtensionTelemetrySchema.parse(raw);
+    const response = await this.request(
+      `${this.config.apiOrigin}/api/extension-telemetry/${z.uuid().parse(id)}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.config.apiToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(2000),
+      },
+    );
+    if (!response.ok) throw Error('TELEMETRY_UNAVAILABLE');
+  }
+  async syncPoll(input: unknown) {
+    return DialogueSyncPollResultSchema.parse(
+      await this.syncRequest('poll', DialogueSyncPollSchema.parse(input)),
+    );
+  }
+  async syncComplete(input: unknown) {
+    return DialogueSyncResultSchema.parse(
+      await this.syncRequest('complete', DialogueSyncCompletionSchema.parse(input)),
+    );
+  }
+  private async syncRequest(action: string, input: unknown) {
+    const response = await this.request(
+      `${this.config.apiOrigin}/api/extension/dialogue-sync/${action}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.config.apiToken}`,
+          'content-type': 'application/json',
+          ...((input as { requestId?: string }).requestId
+            ? { 'x-wai-trace-id': (input as { requestId: string }).requestId }
+            : {}),
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (!response.ok) throw new Error('SYNC_API_UNAVAILABLE');
+    return response.json();
+  }
   async sendPoll(input: unknown) {
     const result = ExtensionSendPollResultSchema.parse(
       await this.sendRequest('poll', ExtensionSendPollSchema.parse(input)),

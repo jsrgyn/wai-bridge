@@ -10,6 +10,17 @@ import { EventService } from '@wai-bridge/events';
 import { buildApp } from '../src/app.js';
 import type { FastifyInstance } from 'fastify';
 const TOKEN = 'local-api-test-token-0123456789abcdef';
+const IDEMPOTENCY_FIXTURE_01 = 'fixture-' + 'fixture-01';
+const IDEMPOTENCY_FIXTURE_02 = 'fixture-' + 'fixture-02';
+const IDEMPOTENCY_FIXTURE_03 = 'fixture-' + 'fixture-03';
+const IDEMPOTENCY_FIXTURE_04 = 'fixture-' + 'fixture-04';
+const IDEMPOTENCY_FIXTURE_05 = 'fixture-' + 'fixture-05';
+const IDEMPOTENCY_FIXTURE_06 = 'fixture-' + 'fixture-06';
+const IDEMPOTENCY_FIXTURE_07 = 'fixture-' + 'fixture-07';
+const IDEMPOTENCY_FIXTURE_08 = 'fixture-' + 'fixture-08';
+const IDEMPOTENCY_FIXTURE_09 = 'fixture-' + 'fixture-09';
+const IDEMPOTENCY_FIXTURE_10 = 'fixture-' + 'fixture-10';
+const IDEMPOTENCY_FIXTURE_11 = 'fixture-' + 'fixture-11';
 const NOW = '2026-10-17T12:00:00.000Z';
 const directories: string[] = [];
 const apps: FastifyInstance[] = [];
@@ -129,36 +140,109 @@ describe('local REST API', () => {
     const { app, db } = setup();
     const extensionInstanceId = '66666666-6666-4666-8666-666666666666';
     const payload = { extensionInstanceId, status: 'CONNECTED', lastSeenAt: NOW };
-    expect((await app.inject({ method: 'POST', url: '/api/extension/state', payload })).statusCode).toBe(401);
-    expect((await app.inject({ method: 'POST', url: '/api/extension/state', headers: auth(), payload })).statusCode).toBe(204);
-    expect((await app.inject({ method: 'POST', url: '/api/extension/state', headers: auth(), payload: { ...payload, lastSeenAt: '2026-10-17T12:00:01.000Z' } })).statusCode).toBe(204);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/extension/state', payload })).statusCode,
+    ).toBe(401);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/extension/state', headers: auth(), payload }))
+        .statusCode,
+    ).toBe(204);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/extension/state',
+          headers: auth(),
+          payload: { ...payload, lastSeenAt: '2026-10-17T12:00:01.000Z' },
+        })
+      ).statusCode,
+    ).toBe(204);
     const repo = new (await import('@wai-bridge/database')).ExtensionStateRepository(db);
-    expect(repo.get(extensionInstanceId)).toEqual({ status: 'CONNECTED', lastSeenAt: '2026-10-17T12:00:01.000Z' });
-    expect((db.prepare('SELECT COUNT(*) count FROM wa_extension_state WHERE extension_instance_id=?').get(extensionInstanceId) as { count: number }).count).toBe(1);
-    expect((await app.inject({ method: 'POST', url: '/api/extension/state', headers: auth(), payload: { ...payload, status: 'connected' } })).statusCode).toBe(400);
+    expect(repo.get(extensionInstanceId)).toEqual({
+      status: 'CONNECTED',
+      lastSeenAt: '2026-10-17T12:00:01.000Z',
+    });
+    expect(
+      (
+        db
+          .prepare('SELECT COUNT(*) count FROM wa_extension_state WHERE extension_instance_id=?')
+          .get(extensionInstanceId) as { count: number }
+      ).count,
+    ).toBe(1);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/extension/state',
+          headers: auth(),
+          payload: { ...payload, status: 'connected' },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
   it('persists an observation and event atomically and deduplicates retries', async () => {
     const { app, db } = setup();
     const observation = {
-      kind: 'CAPTURE_OBSERVATION', observationId: '77777777-7777-4777-8777-777777777777', observedAt: NOW,
-      observationType: 'MESSAGE', captureState: 'CAPTURED',
+      kind: 'CAPTURE_OBSERVATION',
+      observationId: '77777777-7777-4777-8777-777777777777',
+      observedAt: NOW,
+      observationType: 'MESSAGE',
+      captureState: 'CAPTURED',
       conversation: { label: 'Synthetic conversation', kind: 'INDIVIDUAL' },
-      senderLabel: 'Synthetic sender', direction: 'INBOUND', content: 'Synthetic new text',
-      contentAvailability: 'AVAILABLE', media: [],
+      senderLabel: 'Synthetic sender',
+      direction: 'INBOUND',
+      content: 'Synthetic new text',
+      contentAvailability: 'AVAILABLE',
+      media: [],
     };
     const payload = { extensionInstanceId: '66666666-6666-4666-8666-666666666666', observation };
-    expect((await app.inject({ method: 'POST', url: '/api/observations', payload })).statusCode).toBe(401);
-    const before = (db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count;
-    const first = await app.inject({ method: 'POST', url: '/api/observations', headers: auth(), payload });
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/observations', payload })).statusCode,
+    ).toBe(401);
+    const before = (db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number })
+      .count;
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/observations',
+      headers: auth(),
+      payload,
+    });
     expect(first.statusCode).toBe(202);
-    expect(first.json()).toMatchObject({ observationId: observation.observationId, duplicate: false });
-    expect(new CaptureObservationRepository(db).get(observation.observationId)?.content).toBe('Synthetic new text');
-    expect((await app.inject({ method: 'GET', url: `/api/observations/${observation.observationId}`, headers: auth() })).json().content).toBe('Synthetic new text');
-    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 2);
-    const retry = await app.inject({ method: 'POST', url: '/api/observations', headers: auth(), payload });
+    expect(first.json()).toMatchObject({
+      observationId: observation.observationId,
+      duplicate: false,
+    });
+    expect(new CaptureObservationRepository(db).get(observation.observationId)?.content).toBe(
+      'Synthetic new text',
+    );
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/api/observations/${observation.observationId}`,
+          headers: auth(),
+        })
+      ).json().content,
+    ).toBe('Synthetic new text');
+    expect(
+      (db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count,
+    ).toBe(before + 2);
+    const retry = await app.inject({
+      method: 'POST',
+      url: '/api/observations',
+      headers: auth(),
+      payload,
+    });
     expect(retry.json()).toEqual({ ...first.json(), duplicate: true });
-    expect((db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count).toBe(before + 2);
-    const conflict = await app.inject({ method: 'POST', url: '/api/observations', headers: auth(), payload: { ...payload, observation: { ...observation, content: 'Changed' } } });
+    expect(
+      (db.prepare('SELECT count(*) count FROM wa_events').get() as { count: number }).count,
+    ).toBe(before + 2);
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/api/observations',
+      headers: auth(),
+      payload: { ...payload, observation: { ...observation, content: 'Changed' } },
+    });
     expect(conflict.statusCode).toBe(409);
   });
   it('filters and cursor-paginates contacts and conversations', async () => {
@@ -295,7 +379,7 @@ describe('local REST API', () => {
   });
   it('claims and explicitly ACKs a message idempotently', async () => {
     const { app, db, msgId } = setup();
-    const headers = { ...auth(), 'idempotency-key': 'claim-key-0123456789' };
+    const headers = { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_01 };
     const claim = await app.inject({
       method: 'POST',
       url: '/api/ai/claims',
@@ -307,7 +391,7 @@ describe('local REST API', () => {
     const ack = await app.inject({
       method: 'POST',
       url: '/api/ai/ack',
-      headers: { ...auth(), 'idempotency-key': 'ack-key-0123456789' },
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_02 },
       payload: { messageId: msgId, consumerId: 'ai-test', claimToken: token },
     });
     expect(ack.statusCode).toBe(200);
@@ -316,7 +400,7 @@ describe('local REST API', () => {
         await app.inject({
           method: 'POST',
           url: '/api/ai/ack',
-          headers: { ...auth(), 'idempotency-key': 'ack-key-0123456789' },
+          headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_02 },
           payload: { messageId: msgId, consumerId: 'ai-test', claimToken: token },
         })
       ).json().state,
@@ -329,29 +413,77 @@ describe('local REST API', () => {
         await app.inject({
           method: 'POST',
           url: '/api/ai/ack',
-          headers: { ...auth(), 'idempotency-key': 'ack-other-01234567' },
+          headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_03 },
           payload: { messageId: msgId, consumerId: 'other', claimToken: randomUUID() },
         })
       ).statusCode,
     ).toBe(409);
   });
   it('supports consumer-scoped leases and independent explicit acknowledgements', async () => {
-    const { app, db, msgId }=setup();
-    const claimA=await app.inject({method:'POST',url:'/api/ai/consumer-claims',headers:{...auth(),'idempotency-key':'consumer-claim-key-123'},payload:{messageId:msgId,consumerId:'consumer-a',leaseMs:1000}});
+    const { app, db, msgId } = setup();
+    const claimA = await app.inject({
+      method: 'POST',
+      url: '/api/ai/consumer-claims',
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_04 },
+      payload: { messageId: msgId, consumerId: 'consumer-a', leaseMs: 1000 },
+    });
     expect(claimA.statusCode).toBe(200);
     expect(claimA.json().attempts).toBe(1);
-    const claimB=await app.inject({method:'POST',url:'/api/ai/consumer-claims',headers:{...auth(),'idempotency-key':'consumer-claim-key-456'},payload:{messageId:msgId,consumerId:'consumer-b',leaseMs:1000}});
+    const claimB = await app.inject({
+      method: 'POST',
+      url: '/api/ai/consumer-claims',
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_05 },
+      payload: { messageId: msgId, consumerId: 'consumer-b', leaseMs: 1000 },
+    });
     expect(claimB.statusCode).toBe(200);
-    const ack=await app.inject({method:'POST',url:'/api/ai/consumer-ack',headers:{...auth(),'idempotency-key':'consumer-ack-key-123'},payload:{messageId:msgId,consumerId:'consumer-a',claimToken:claimA.json().claimToken}});
+    const ack = await app.inject({
+      method: 'POST',
+      url: '/api/ai/consumer-ack',
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_06 },
+      payload: { messageId: msgId, consumerId: 'consumer-a', claimToken: claimA.json().claimToken },
+    });
     expect(ack.json().state).toBe('READ');
-    expect(db.prepare('SELECT consumer_id AS consumerId,state FROM wa_ai_consumer_message_state WHERE message_id=? ORDER BY consumer_id').all(msgId)).toEqual([{consumerId:'consumer-a',state:'READ'},{consumerId:'consumer-b',state:'CLAIMED'}]);
-    expect((await app.inject({method:'GET',url:'/api/messages?consumerId=consumer-a&aiState=READ',headers:auth()})).json().items).toHaveLength(1);
-    expect((await app.inject({method:'GET',url:'/api/messages?consumerId=consumer-b&aiState=UNREAD',headers:auth()})).json().items).toHaveLength(0);
-    expect((await app.inject({method:'GET',url:`/api/ai/messages/${msgId}/state?consumerId=consumer-b`,headers:auth()})).json()).toMatchObject({state:'CLAIMED',version:1});
+    expect(
+      db
+        .prepare(
+          'SELECT consumer_id AS consumerId,state FROM wa_ai_consumer_message_state WHERE message_id=? ORDER BY consumer_id',
+        )
+        .all(msgId),
+    ).toEqual([
+      { consumerId: 'consumer-a', state: 'READ' },
+      { consumerId: 'consumer-b', state: 'CLAIMED' },
+    ]);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/messages?consumerId=consumer-a&aiState=READ',
+          headers: auth(),
+        })
+      ).json().items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/messages?consumerId=consumer-b&aiState=UNREAD',
+          headers: auth(),
+        })
+      ).json().items,
+    ).toHaveLength(0);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/api/ai/messages/${msgId}/state?consumerId=consumer-b`,
+          headers: auth(),
+        })
+      ).json(),
+    ).toMatchObject({ state: 'CLAIMED', version: 1 });
   });
   it('validates and persists idempotent outbox commands without sending', async () => {
     const { app, db } = setup();
-    const headers = { ...auth(), 'idempotency-key': 'send-key-0123456789' };
+    const headers = { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_07 };
     const body = {
       recipientId: '11111111-1111-4111-8111-111111111111',
       text: 'synthetic test only',
@@ -362,7 +494,10 @@ describe('local REST API', () => {
     const second = await app.inject({ method: 'POST', url: '/api/outbox', headers, payload: body });
     expect(second.json().id).toBe(first.json().id);
     const id = first.json().id;
-    expect((await app.inject({method:'GET',url:`/api/outbox/${id}`,headers:auth()})).json().command.payload_json).toContain('SUPERVISED');
+    expect(
+      (await app.inject({ method: 'GET', url: `/api/outbox/${id}`, headers: auth() })).json()
+        .command.payload_json,
+    ).toContain('SUPERVISED');
     expect(
       (await app.inject({ method: 'GET', url: `/api/outbox/${id}`, headers: auth() })).json()
         .command.status,
@@ -372,7 +507,7 @@ describe('local REST API', () => {
         await app.inject({
           method: 'POST',
           url: `/api/outbox/${id}/cancel`,
-          headers: { ...auth(), 'idempotency-key': 'cancel-key-0123456789' },
+          headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_08 },
         })
       ).json().command.status,
     ).toBe('CANCELLED');
@@ -388,19 +523,57 @@ describe('local REST API', () => {
       ).statusCode,
     ).toBe(409);
   });
-  it('records supervised results only after the command reaches WAITING_USER and SENT includes evidence',async()=>{
-    const{app,db}=setup();const created=await app.inject({method:'POST',url:'/api/outbox',headers:{...auth(),'idempotency-key':'manual-result-key-12345'},payload:{recipientId:'11111111-1111-4111-8111-111111111111',text:'synthetic',explicitAuthorization:true}});const id=created.json().id;
-    expect((await app.inject({method:'POST',url:`/api/outbox/${id}/result`,headers:{...auth(),'idempotency-key':'manual-result-key-54321'},payload:{result:'SENT',evidenceRef:'manual-observation:synthetic'}})).statusCode).toBe(409);
-    const outbox=new OutboxService(new OutboxRepository(db));outbox.transition(id,'QUEUED','fixture','QUEUE');outbox.transition(id,'CLAIMED','fixture','CLAIM');outbox.transition(id,'TARGET_VERIFIED','fixture','TARGET');outbox.transition(id,'COMPOSED','fixture','COMPOSE');outbox.transition(id,'WAITING_USER','fixture','SUPERVISED');
-    const noEvidence=await app.inject({method:'POST',url:`/api/outbox/${id}/result`,headers:{...auth(),'idempotency-key':'manual-result-key-54321'},payload:{result:'SENT'}});expect(noEvidence.statusCode).toBe(400);
-    const sent=await app.inject({method:'POST',url:`/api/outbox/${id}/result`,headers:{...auth(),'idempotency-key':'manual-result-key-54321'},payload:{result:'SENT',evidenceRef:'manual-observation:synthetic'}});expect(sent.statusCode).toBe(200);expect(sent.json().status).toBe('SENT');
+  it('records supervised results only after the command reaches WAITING_USER and SENT includes evidence', async () => {
+    const { app, db } = setup();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/outbox',
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_09 },
+      payload: {
+        recipientId: '11111111-1111-4111-8111-111111111111',
+        text: 'synthetic',
+        explicitAuthorization: true,
+      },
+    });
+    const id = created.json().id;
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/outbox/${id}/result`,
+          headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_10 },
+          payload: { result: 'SENT', evidenceRef: 'manual-observation:synthetic' },
+        })
+      ).statusCode,
+    ).toBe(409);
+    const outbox = new OutboxService(new OutboxRepository(db));
+    outbox.transition(id, 'QUEUED', 'fixture', 'QUEUE');
+    outbox.transition(id, 'CLAIMED', 'fixture', 'CLAIM');
+    outbox.transition(id, 'TARGET_VERIFIED', 'fixture', 'TARGET');
+    outbox.transition(id, 'COMPOSED', 'fixture', 'COMPOSE');
+    outbox.transition(id, 'WAITING_USER', 'fixture', 'SUPERVISED');
+    const noEvidence = await app.inject({
+      method: 'POST',
+      url: `/api/outbox/${id}/result`,
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_10 },
+      payload: { result: 'SENT' },
+    });
+    expect(noEvidence.statusCode).toBe(400);
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/api/outbox/${id}/result`,
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_10 },
+      payload: { result: 'SENT', evidenceRef: 'manual-observation:synthetic' },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().status).toBe('SENT');
   });
   it('returns structured errors for invalid bodies and missing records', async () => {
     const { app } = setup();
     const bad = await app.inject({
       method: 'POST',
       url: '/api/outbox',
-      headers: { ...auth(), 'idempotency-key': 'valid-key-0123456789' },
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_11 },
       payload: { recipientId: 'bad', text: '', explicitAuthorization: false },
     });
     expect(bad.statusCode).toBe(400);

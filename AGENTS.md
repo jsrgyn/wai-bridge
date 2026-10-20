@@ -16,6 +16,7 @@ Este arquivo é o ponto de entrada para qualquer pessoa ou agente que trabalhe n
 - Não capture histórico indiscriminadamente, não acesse credenciais de sessão, não intercepte protocolos internos e não implemente antidetecção.
 - Nunca efetue envios reais em testes automatizados. Operações destrutivas exigem autorização explícita.
 - Use dados sintéticos em testes, valide contratos com Zod e mantenha TypeScript strict, logs estruturados e erros tratados.
+- Este repositório é público: não grave nem reproduza nomes, contatos, telefones, e-mails, mensagens, IDs reais, caminhos locais, screenshots ou estado de contas em código, fixtures, logs ou documentação. Revise o diff e respeite o hook de privacidade Git.
 - Atualize `.ai/context/current-state.md` ao concluir cada tarefa, descrevendo apenas o estado verificado.
 - Não declare validações como executadas sem evidência observável; informe comandos e resultados reais.
 

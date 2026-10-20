@@ -27,6 +27,11 @@ export const migrations: readonly Migration[] = [
   loadMigration(9, 'automatic-ui-context', '009-automatic-ui-context.sql'),
   loadMigration(10, 'contact-phone', '010-contact-phone.sql'),
   loadMigration(11, 'flow-logs', '011-flow-logs.sql'),
+  loadMigration(12, 'capture-revisions', '012-capture-revisions.sql'),
+  loadMigration(13, 'dialogue-sync', '013-dialogue-sync.sql'),
+  loadMigration(14, 'conversation-review', '014-conversation-review.sql'),
+  loadMigration(15, 'contact-directory-and-sync-batches', '015-contact-directory-and-sync-batches.sql'),
+  loadMigration(16, 'operational-management', '016-operational-management.sql'),
 ];
 
 export function applyMigrations(

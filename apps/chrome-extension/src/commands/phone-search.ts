@@ -1,4 +1,4 @@
-import type { ConversationIdentity } from '@wai-bridge/shared';
+import { normalizeProfilePhone, type ConversationIdentity } from '@wai-bridge/shared';
 import { visiblePeerDetails } from '../identity/visible-peer-details.js';
 
 export function isVisible(element: Element): boolean {
@@ -26,6 +26,13 @@ export function isVisible(element: Element): boolean {
   }
   return true;
 }
+export type ResolvedPhoneRecipient = {
+  root: HTMLElement;
+  contextId: string;
+  phone: string;
+  label: string;
+  identity: ConversationIdentity;
+};
 export class PhoneSearch {
   private input: HTMLInputElement | undefined;
   private phone: string | undefined;
@@ -33,6 +40,7 @@ export class PhoneSearch {
   constructor(
     private readonly doc: Document,
     private readonly identity: { current(): ConversationIdentity | undefined },
+    private readonly onOpenStage?: (phase: 'CHAT_OPEN_STARTED' | 'CHAT_OPENED') => void,
   ) {}
   private readonly interrupt = (event: Event) => {
     if (event.isTrusted) this.interrupted = true;
@@ -42,7 +50,10 @@ export class PhoneSearch {
     accountId: string,
     signal: AbortSignal,
     gate: () => void,
-  ): Promise<{ root: HTMLElement; contextId: string }> {
+  ): Promise<ResolvedPhoneRecipient> {
+    const normalizedPhone = normalizeProfilePhone(phone);
+    if (!normalizedPhone) throw new Error('RECIPIENT_PHONE_MISMATCH');
+    phone = normalizedPhone;
     const check = () => {
       gate();
       if (signal.aborted) throw new Error('USER_CANCELLED');
@@ -76,7 +87,8 @@ export class PhoneSearch {
     if (openRoot && openLabel && visiblePeerDetails(this.doc, openLabel).phone === phone) {
       check();
       const current = this.identity.current();
-      if (current?.accountId === accountId) return { root: openRoot, contextId: current.contextId };
+      if (current?.accountId === accountId)
+        return this.confirmAndClose(openRoot, phone, accountId, check);
     }
     const searchInputs = () =>
       [
@@ -94,32 +106,7 @@ export class PhoneSearch {
       ...this.doc.querySelectorAll<HTMLElement>('[data-testid="chat-info-drawer"]'),
     ].filter(isVisible);
     if (drawers.length) {
-      if (
-        drawers.length !== 1 ||
-        [...drawers[0]!.querySelectorAll('input,textarea,[contenteditable="true"]')].some(
-          (field) =>
-            isVisible(field) &&
-            !field.matches(
-              'input[type="search"],input[type="checkbox"],input[type="radio"],input[readonly],input[disabled],textarea[readonly],textarea[disabled]',
-            ),
-        )
-      )
-        throw new Error('PROFILE_HAS_INPUT');
-      const close = [
-        ...drawers[0]!.querySelectorAll<HTMLButtonElement>(
-          'button[aria-label="Fechar"],button[aria-label="Close"]',
-        ),
-      ].filter(isVisible);
-      if (close.length !== 1 || close[0]!.disabled) throw new Error('PROFILE_CLOSE_UNAVAILABLE');
-      check();
-      close[0]!.click();
-      await this.until(
-        () =>
-          [...this.doc.querySelectorAll('[data-testid="chat-info-drawer"]')].some(isVisible)
-            ? undefined
-            : true,
-        check,
-      );
+      await this.closeProfile(check);
       inputs = searchInputs();
       if (inputs.length !== 1 || inputs[0]!.value.trim()) throw new Error('SEARCH_CHANGED');
     }
@@ -156,27 +143,45 @@ export class PhoneSearch {
     }
     if (!candidate) throw new Error('PHONE_CONTACT_NOT_FOUND');
     check();
-    const expectedLabel = candidate
-      .querySelector('[data-testid="cell-frame-title"]')
-      ?.textContent?.trim();
+    const expectedLabel = this.resultLabel(candidate);
     if (!expectedLabel) throw new Error('PHONE_RESULT_LABEL_UNAVAILABLE');
     const directoryInput = this.input?.closest('[data-testid="new-chat-drawer"]');
-    candidate.click();
+    this.openCandidate(candidate);
     if (directoryInput) this.input = undefined;
-    await this.until(() => {
-      if (
+    await this.until(
+      () =>
         this.doc
           .querySelector('#main [data-testid="conversation-info-header-chat-title"]')
-          ?.textContent?.trim() !== expectedLabel
-      )
-        return undefined;
-      const controls = [
-        ...this.doc.querySelectorAll<HTMLElement>(
-          '#main header [role="button"][aria-label="Dados do perfil"],#main header [role="button"][aria-label="Profile details"]',
-        ),
-      ].filter(isVisible);
-      return controls.length === 1 ? controls[0] : undefined;
-    }, check).then((control) => control.click());
+          ?.textContent?.trim()
+          .normalize('NFC') === expectedLabel
+          ? true
+          : undefined,
+      check,
+      'PHONE_CHAT_UNAVAILABLE',
+    );
+    this.traceOpen('CHAT_OPENED');
+    // Opening an already visible profile can toggle it closed. Reuse only a
+    // verified matching profile; never accept a result based on its name alone.
+    const existingDetails = visiblePeerDetails(this.doc, expectedLabel);
+    if (existingDetails.kind === 'GROUP') throw new Error('RECIPIENT_IS_GROUP');
+    if (existingDetails.phone && existingDetails.phone !== phone)
+      throw new Error('RECIPIENT_PHONE_MISMATCH');
+    if (existingDetails.phone !== phone) {
+      const control = await this.until(
+        () => {
+          const controls = [
+            ...this.doc.querySelectorAll<HTMLElement>(
+              '#main header button[aria-label="Dados do perfil"],#main header button[aria-label="Profile details"],#main header [role="button"][aria-label="Dados do perfil"],#main header [role="button"][aria-label="Profile details"]',
+            ),
+          ].filter(isVisible);
+          return controls.length === 1 ? controls[0] : undefined;
+        },
+        check,
+        'PHONE_PROFILE_CONTROL_UNAVAILABLE',
+      );
+      check();
+      control.click();
+    }
     const root = await this.until(() => {
       const roots = this.doc.querySelectorAll<HTMLElement>('#main');
       if (roots.length !== 1) return undefined;
@@ -190,11 +195,147 @@ export class PhoneSearch {
       if (details.phone && details.phone !== phone) throw new Error('RECIPIENT_PHONE_MISMATCH');
       return details.kind === 'INDIVIDUAL' && details.phone === phone ? root : undefined;
     }, check);
+    return this.confirmAndClose(root, phone, accountId, check);
+  }
+  private async confirmAndClose(
+    root: HTMLElement,
+    phone: string,
+    accountId: string,
+    check: () => void,
+  ): Promise<ResolvedPhoneRecipient> {
+    check();
+    const label = root
+      .querySelector('[data-testid="conversation-info-header-chat-title"]')
+      ?.textContent?.trim();
+    if (!label || visiblePeerDetails(this.doc, label).phone !== phone)
+      throw new Error('RECIPIENT_PHONE_MISMATCH');
+    // Close only after capturing exact visible evidence. The proof is scoped to
+    // this execution, DOM root and context, never a reusable authorization by name.
+    await this.closeProfile(check);
     check();
     const current = this.identity.current();
     if (!current || current.accountId !== accountId) throw new Error('RECIPIENT_ACCOUNT_MISMATCH');
+    if (
+      this.doc.querySelector('#main') !== root ||
+      root
+        .querySelector('[data-testid="conversation-info-header-chat-title"]')
+        ?.textContent?.trim() !== label
+    )
+      throw new Error('RECIPIENT_CONTEXT_MISMATCH');
+    const identity: ConversationIdentity =
+      current.type === 'UI_CONTEXT'
+        ? { ...current, conversationKind: 'INDIVIDUAL', phone }
+        : current;
+    if (identity.type !== 'UI_CONTEXT' && (identity.type !== 'PHONE' || identity.phone !== phone))
+      throw new Error('RECIPIENT_PHONE_MISMATCH');
     this.removeListeners();
-    return { root, contextId: current.contextId };
+    return { root, contextId: current.contextId, phone, label, identity };
+  }
+  private async closeProfile(check: () => void): Promise<void> {
+    const drawers = [
+      ...this.doc.querySelectorAll<HTMLElement>('[data-testid="chat-info-drawer"]'),
+    ].filter(isVisible);
+    if (
+      drawers.length !== 1 ||
+      [...drawers[0]!.querySelectorAll('input,textarea,[contenteditable="true"]')].some(
+        (field) =>
+          isVisible(field) &&
+          !field.matches(
+            'input[type="search"],input[type="checkbox"],input[type="radio"],input[readonly],input[disabled],textarea[readonly],textarea[disabled]',
+          ),
+      )
+    )
+      throw new Error('PROFILE_HAS_INPUT');
+    const controls = [
+      ...drawers[0]!.querySelectorAll<HTMLElement>(
+        'button[aria-label="Fechar"],button[aria-label="Close"],[role="button"][aria-label="Fechar"],[role="button"][aria-label="Close"]',
+      ),
+    ].filter(isVisible);
+    if (
+      controls.length !== 1 ||
+      controls[0]!.getAttribute('aria-disabled') === 'true' ||
+      (controls[0] instanceof HTMLButtonElement && controls[0].disabled)
+    )
+      throw new Error('PROFILE_CLOSE_UNAVAILABLE');
+    check();
+    controls[0]!.click();
+    await this.until(
+      () =>
+        [...this.doc.querySelectorAll('[data-testid="chat-info-drawer"]')].some(isVisible)
+          ? undefined
+          : true,
+      check,
+      'PROFILE_CLOSE_UNAVAILABLE',
+    );
+  }
+  private traceOpen(phase: 'CHAT_OPEN_STARTED' | 'CHAT_OPENED'): void {
+    try {
+      this.onOpenStage?.(phase);
+    } catch {
+      /* Diagnostics never change execution. */
+    }
+  }
+  private resultLabel(candidate: HTMLElement): string | undefined {
+    const title = candidate.querySelector('[data-testid="cell-frame-title"]');
+    if (!title) return undefined;
+    // The title container also contains the unread badge. Read the named span
+    // when available; highlights remain part of its rendered text.
+    const named = [...title.querySelectorAll('[title]')].filter((e) =>
+      e.getAttribute('title')?.trim(),
+    );
+    if (named.length > 1) throw new Error('PHONE_RESULT_LABEL_UNAVAILABLE');
+    return (named[0] ?? title).textContent?.trim().normalize('NFC');
+  }
+  private openCandidate(candidate: HTMLElement): void {
+    const scope = candidate.closest('#pane-side,[data-testid="new-chat-drawer"]');
+    if (!scope || !candidate.isConnected || !isVisible(candidate))
+      throw new Error('SEARCH_RESULTS_NOT_READY');
+    const row = candidate.closest('[role="row"]');
+    const actionable = candidate.closest<HTMLElement>('[role="gridcell"],[role="button"],button');
+    const target =
+      actionable && scope.contains(actionable) && (!row || row.contains(actionable))
+        ? actionable
+        : candidate;
+    if (target.querySelectorAll('[data-testid="cell-frame-container"]').length > 1)
+      throw new Error('AMBIGUOUS_PHONE_RESULTS');
+    this.traceOpen('CHAT_OPEN_STARTED');
+    target.focus({ preventScroll: true });
+    // HTMLElement.click alone omits the press events used by list selection.
+    // Use one ordinary DOM gesture on the uniquely resolved row, never a global
+    // first-result click, private application handlers or a repeated send.
+    const view = this.doc.defaultView!;
+    const dispatch = (event: Event) => {
+      if (candidate.isConnected && target.isConnected) candidate.dispatchEvent(event);
+    };
+    dispatch(
+      new view.PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+      }),
+    );
+    dispatch(
+      new view.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, buttons: 1 }),
+    );
+    dispatch(
+      new view.PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+      }),
+    );
+    dispatch(
+      new view.MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0, buttons: 0 }),
+    );
+    if (candidate.isConnected && target.isConnected) candidate.click();
   }
   /** Search also returns groups in common and message matches; neither is a direct recipient. */
   private candidateRows(scope: string): HTMLElement[] {
@@ -305,7 +446,11 @@ export class PhoneSearch {
     setter.call(this.input, value);
     this.input.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  private async until<T>(read: () => T | undefined, check: () => void): Promise<T> {
+  private async until<T>(
+    read: () => T | undefined,
+    check: () => void,
+    code = 'PHONE_PROFILE_UNAVAILABLE',
+  ): Promise<T> {
     const due = Date.now() + 5000;
     while (Date.now() < due) {
       check();
@@ -313,6 +458,6 @@ export class PhoneSearch {
       if (value) return value;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    throw new Error('PHONE_PROFILE_UNAVAILABLE');
+    throw new Error(code);
   }
 }

@@ -5,7 +5,7 @@ export class WhatsAppDomAdapter {
   private readonly rowSelector =
     '[data-wai-conversation-row], [data-testid="cell-frame-container"], [role="row"], [role="listitem"]';
   private readonly unreadSelector =
-    '[data-wai-unread-count], [data-testid="icon-unread-count"], [aria-label*="unread" i]';
+    '[data-wai-unread-count], [data-testid="icon-unread-count"], [aria-label*="unread" i], [aria-label*="não lida" i], [aria-label*="nao lida" i]';
 
   findMessageRoots(scope: ParentNode): HTMLElement[] {
     return this.findRoots(scope, '[data-wai-observation-root][role="log"], #main');
@@ -28,7 +28,15 @@ export class WhatsAppDomAdapter {
 
   containingMessage(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
-    return element?.closest<HTMLElement>(this.messageSelector) ?? null;
+    let message = element?.closest<HTMLElement>(this.messageSelector) ?? null;
+    // Use the same outer bubble selected by findNewMessages, including when
+    // current UI nests msg-container inside a direction wrapper.
+    let outer = message?.parentElement?.closest<HTMLElement>(this.messageSelector);
+    while (outer) {
+      message = outer;
+      outer = outer.parentElement?.closest<HTMLElement>(this.messageSelector);
+    }
+    return message;
   }
 
   renderKey(message: HTMLElement): string | undefined {

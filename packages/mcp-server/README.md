@@ -102,3 +102,22 @@ idempotencyKey (accountId opcional). A API resolve o SQLite da conta ativa para 
 parentesco nem escolhe homônimos. Número ausente do SQLite usa
 `whatsapp_send_to_number`; contato é registrado somente após prova na interface.
 Após o pedido, volte à aba do WhatsApp para execução visível. REQUESTED não é SENT.
+
+
+### Conferência atual no WhatsApp
+
+Para pedidos como “confira a conversa de Fulano agora”, use `whatsapp_sync_dialogue` com `query` (nome/grupo/número internacional), opcional accountId, limit1..50 e idempotencyKey. A extensão ON localiza o resultado único e reconcilia somente o snapshot renderizado, sem rolar, enviar ou limpar rascunhos. O MCP retorna mensagens lidas da API/SQLite após SUCCEEDED, ordenadas pela UI, com synchronized=true; pending/failure não devolve cache como atual. O opt-in de envio não é necessário. Nova ferramenta `whatsapp_get_sync_status` consulta o UUID sem repetir navegação. Reconecte o cliente MCP após atualizar para descobrir26 ferramentas. Abrir a conversa pode alterar a leitura no WhatsApp, sem confirmar AI READ. Cobertura complete=false e limites de DOM permanecem.
+
+### Pendências — ADR0019
+
+`whatsapp_list_pending_conversations` (total/paginação/filtros), `whatsapp_get_conversation_review` (estágio/revisões), `whatsapp_confirm_conversation_read` (ACK explícito de snapshot/revisão) e `whatsapp_link_conversation_references` (associação explícita sem fusão) completam26 ferramentas. Lista não navega. Somente solicitação explícita usa `whatsapp_sync_dialogue`, com `conversationId` da pendência e título exato/telefone, até50 mensagens renderizadas. Sincronizar não confirma leitura; sinal concorrente permanece pendente. Sem cobertura integral/rolagem/reexecução automática. ACK e associação têm confirmação literal independente das permissões de envio; não mudam AI READ por mensagem nem autorizam envio. Contratos em `packages/shared/src/conversation-review.ts` e operação em `docs/operations/autonomous-capture.md`.
+
+### Contatos locais e lotes — ADR0020
+
+Cinco ferramentas novas (31 no total): `whatsapp_list_contacts`, `whatsapp_sync_pending_conversations`, `whatsapp_get_sync_batch`, `whatsapp_cancel_sync_batch`, `whatsapp_resume_sync_batch`. Diretório usa `/api/contacts/directory` somente SQLite, com nome/apelido/nome completo/telefone reais, busca literal por igualdade/prefixo/trecho e datas locais combinadas. Não inferir esposa/parentesco; dados ausentes null. Lista de contatos não navega.
+
+Somente “ler/sincronizar todos pendentes” ou seleção explícita autoriza batch com explicitAuthorization=true e chave idempotente. Snapshot da lista, uma conta, máximo5000 sem truncar; extensão recebe array e processa um job/até50 renderizadas por vez. Retorna ID/progresso e resultados paginados somente após commit; não considerar PAUSED ou falhas como conclusão integral. `get_sync_batch` retorna até10 diálogos por página (padrão5), seguir nextCursor. Cancelamento sinaliza leitor ativo; retomada explícita não repete sucessos e só retryFailedItem=true tenta novamente falha. Não há ACK de leitura nem AI READ automático. Operação/limites em `docs/operations/contacts-and-batches.md`.
+
+ADR0021 adiciona14 ferramentas (45 no total): whatsapp_get_permissions, whatsapp_get_operations, whatsapp_create_contact, whatsapp_get_contact_catalog, whatsapp_update_contact, whatsapp_list_reference_candidates, whatsapp_decide_reference, whatsapp_get_conversation_policy, whatsapp_update_conversation_policy, whatsapp_get_sync_batch_report, whatsapp_retry_failed_sync_batch, whatsapp_maintenance_get, whatsapp_maintenance_update e whatsapp_backup_run. Veja [operações](../../docs/operations/operational-console.md).
+
+`WAI_MCP_PERMISSIONS=CONTACTS_READ,CONVERSATIONS_READ,OPERATIONS_READ` restringe este processo. Variável omitida preserva comportamento legado, vazia nega todas as operações exceto consulta do perfil. Capacidades desconhecidas falham no início. Novas escritas exigem capacidade própria ou allow-writes legado, sempre com confirmação literal. Perfil SEND ainda depende de opt-ins existentes. Reconecte o cliente MCP após rebuild.

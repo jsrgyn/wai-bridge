@@ -1,3 +1,5 @@
+import { messageText } from '../adapters/message-text.js';
+import { conversationRowLabel } from '../adapters/conversation-label.js';
 import { CaptureObservationSchema, type CaptureObservation } from '../contracts.js';
 import { WhatsAppDomAdapter } from '../adapters/dom-adapter.js';
 import { GroupDetector } from '../adapters/group-detector.js';
@@ -6,10 +8,11 @@ import { CaptureStateManager } from './capture-state-manager.js';
 export class ConversationObserver {
   private readonly observers = new Map<HTMLElement, MutationObserver>();
   // Memory only: previews are change signals, never persisted as full messages.
+  private unread = new WeakMap<HTMLElement, number | null>();
   private previews = new WeakMap<HTMLElement, string | null>();
 
   constructor(
-    private readonly emit: (value: CaptureObservation) => void,
+    private readonly emit: (value: CaptureObservation, root?: HTMLElement) => void,
     private readonly state: CaptureStateManager,
     private readonly adapter = new WhatsAppDomAdapter(),
     private readonly groups = new GroupDetector(),
@@ -21,7 +24,10 @@ export class ConversationObserver {
     for (const row of this.rows(list)) {
       this.previews.set(row, this.preview(row));
       this.state.claimNewRow(row);
-      this.state.claimUnreadChange(row, this.adapter.unreadCount(row) ?? 0);
+      const count = this.adapter.unreadCount(row);
+      this.unread.set(row, count ?? null);
+      this.state.claimUnreadChange(row, count ?? 0);
+      if (count && count > 0) this.emit(this.detected(row, 'INITIAL_UNREAD'), row);
     }
     const observer = new MutationObserver((records) => {
       const changed = new Set<HTMLElement>();
@@ -34,6 +40,11 @@ export class ConversationObserver {
       }
       for (const row of changed) {
         if (!row.isConnected || !list.contains(row)) continue;
+        const count = this.adapter.unreadCount(row) ?? null;
+        const previousCount = this.unread.get(row);
+        this.unread.set(row, count);
+        const decreased =
+          previousCount !== undefined && previousCount !== null && (count ?? 0) < previousCount;
         const fresh = this.state.claimNewRow(row);
         const unread = this.state.claimUnreadChange(row, this.adapter.unreadCount(row) ?? 0);
         const preview = this.preview(row);
@@ -42,23 +53,31 @@ export class ConversationObserver {
         this.previews.set(row, preview);
         // A phone/browser outgoing message may change the preview without unread.
         // Neither a preview nor a UI change proves direction or complete content.
-        if (fresh || unread || updatedPreview) this.emit(this.detected(row));
+        if (fresh || unread || updatedPreview) this.emit(this.detected(row, 'ROW_CHANGED'), row);
+        else if (decreased) this.emit(this.detected(row, 'UNREAD_DECREASED'), row);
       }
     });
     observer.observe(list, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['aria-label', 'data-wai-unread-count'],
       characterData: true,
     });
     this.observers.set(list, observer);
   }
 
+  prune(): void {
+    for (const [root, observer] of this.observers)
+      if (!root.isConnected) {
+        observer.disconnect();
+        this.observers.delete(root);
+      }
+  }
   stop(): void {
     for (const observer of this.observers.values()) observer.disconnect();
     this.observers.clear();
     this.previews = new WeakMap();
+    this.unread = new WeakMap();
   }
 
   private canonical(row: HTMLElement): HTMLElement {
@@ -75,13 +94,26 @@ export class ConversationObserver {
     if (!content && !timestamp) return null;
     // Bounded transient comparison, not message or conversation identity.
     return JSON.stringify([
-      content?.textContent?.slice(0, 1024) ?? null,
+      content ? messageText(content).slice(0, 1024) : null,
       timestamp?.textContent?.slice(0, 80) ?? null,
+      [
+        ...row.querySelectorAll(
+          '[data-testid="last-msg-status"] [aria-label],[data-testid="last-msg-status"] [data-icon]',
+        ),
+      ]
+        .slice(0, 8)
+        .map((e) => [
+          e.getAttribute('aria-label')?.slice(0, 80),
+          e.getAttribute('data-icon')?.slice(0, 80),
+        ]),
     ]);
   }
 
-  private detected(row: HTMLElement): CaptureObservation {
-    const title = row.querySelector('[data-testid="cell-frame-title"]')?.textContent;
+  private detected(
+    row: HTMLElement,
+    reason: 'INITIAL_UNREAD' | 'ROW_CHANGED' | 'UNREAD_DECREASED',
+  ): CaptureObservation {
+    const title = conversationRowLabel(row);
     return CaptureObservationSchema.parse({
       kind: 'CAPTURE_OBSERVATION',
       observationId: crypto.randomUUID(),
@@ -97,6 +129,7 @@ export class ConversationObserver {
       content: null,
       contentAvailability: 'UNAVAILABLE',
       media: [],
+      activity: { unreadCount: this.adapter.unreadCount(row) ?? null, reason },
     });
   }
 }

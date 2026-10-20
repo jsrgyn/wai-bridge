@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="pt-BR">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>WAI Bridge — Painel operacional</title
+  ><link rel="stylesheet" href="dashboard.css" />
+  <body>
+    <header>
+      <h1>WAI Bridge</h1>
+      <p>Painel local · cobertura parcial do conteúdo visível</p>
+      <button id="refresh">Atualizar diagnóstico</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </header>
+    <main>
+      <section>
+        <h2>Operação e fila de captura</h2>
+        <pre id="summary">Carregando…</pre>
+      </section>
+      <section>
+        <h2>Contatos locais</h2>
+        <form id="search">
+          <label>Nome, apelido ou relação <input name="query" /></label
+          ><label
+            >Correspondência
+            <select name="match">
+              <option>CONTAINS</option>
+              <option>STARTS_WITH</option>
+              <option>EXACT</option>
+            </select></label
+          ><label
+            >Cadastro
+            <select name="registeredPeriod">
+              <option value="">Qualquer data</option>
+              <option value="TODAY">Hoje</option>
+              <option value="YESTERDAY">Ontem</option>
+            </select></label
+          ><button>Consultar SQLite</button>
+        </form>
+        <div id="contacts"></div>
+        <button id="contacts-next" disabled>Próxima página</button>
+        <form id="contact">
+          <h3>Criar ou editar cadastro</h3>
+          <p>O telefone informado é cadastral. Não comprova o destinatário de um envio.</p>
+          <label>ID para edição <input name="id" readonly /></label
+          ><label>Versão <input name="version" readonly value="0" /></label
+          ><label>Conta local (UUID, para criar) <input name="accountId" /></label
+          ><label>Nome <input name="name" maxlength="256" /></label
+          ><label>Apelido <input name="nickname" maxlength="256" /></label
+          ><label>Nome completo <input name="fullName" maxlength="256" /></label
+          ><label>Telefone internacional <input name="phone" placeholder="+5511999990000" /></label
+          ><label
+            >Relações explícitas, separadas por vírgula
+            <input name="relationships" placeholder="esposa" /></label
+          ><label
+            ><input name="confirmed" type="checkbox" required />Confirmo esta alteração
+            cadastral</label
+          ><button>Salvar cadastro</button
+          ><button id="new-contact" type="button">Limpar / novo</button>
+        </form>
+      </section>
+      <section>
+        <h2>Revisar possíveis referências duplicadas</h2>
+        <p>Revisão explícita. Os históricos permanecem separados.</p>
+        <button id="candidates-refresh">Consultar propostas</button>
+        <div id="candidates"></div>
+        <button id="candidates-next" disabled>Próximas propostas</button>
+      </section>
+      <section>
+        <h2>Política de leitura</h2>
+        <form id="policy">
+          <label>Conversa (UUID) <input name="id" required /></label
+          ><button type="button" id="policy-load">Carregar</button
+          ><label><input name="favorite" type="checkbox" />Favorita</label
+          ><label
+            >Prioridade
+            <input name="priority" type="number" min="-100" max="100" value="0" /></label
+          ><label
+            >Participação em lotes
+            <select name="batchMode">
+              <option value="INCLUDE">Incluir</option>
+              <option value="EXCLUDE">Excluir</option>
+              <option value="INDIVIDUAL_ONLY">Somente individual</option>
+            </select></label
+          ><label><input name="confirmed" type="checkbox" required />Confirmo esta política</label
+          ><button>Salvar política</button>
+        </form>
+      </section>
+      <section>
+        <h2>Lotes e relatório</h2>
+        <p>
+          Cancelar interrompe os próximos passos. Retomar e repetir falhas exigem seu pedido
+          explícito.
+        </p>
+        <div id="batches"></div>
+        <label>Lote (UUID) <input id="batch-id" /></label
+        ><label><input id="batch-confirm" type="checkbox" />Solicito a operação selecionada</label
+        ><label
+          ><input id="retry-paused" type="checkbox" />Ao retomar, repetir o item que pausou</label
+        >
+        <div class="actions">
+          <button id="batch-report">Ver relatório</button
+          ><button id="batch-cancel">Cancelar lote</button
+          ><button id="batch-resume">Retomar lote</button
+          ><button id="batch-retry">Novo lote só com falhas</button>
+        </div>
+        <pre id="report"></pre>
+        <button id="report-next" disabled>Próxima página do relatório</button>
+      </section>
+      <section>
+        <h2>Backup e manutenção</h2>
+        <p>
+          Backups têm validação de integridade e de uma cópia restaurada. Restauração do banco em
+          uso continua sendo uma operação manual.
+        </p>
+        <form id="maintenance">
+          <label><input name="backupEnabled" type="checkbox" />Backup automático</label
+          ><label
+            >Intervalo (horas) <input name="intervalHours" type="number" min="1" max="168" /></label
+          ><label
+            >Retenção de backups (dias)
+            <input name="retentionDays" type="number" min="1" max="3650" /></label
+          ><label
+            >Limite em bytes
+            <input name="maxBackupBytes" type="number" min="1048576" max="107374182400" /></label
+          ><label
+            >Mínimo de backups preservados
+            <input name="minBackups" type="number" min="1" max="100" /></label
+          ><label
+            ><input name="pruneBackups" type="checkbox" />Permitir limpeza de backups gerenciados
+            excedentes</label
+          ><label
+            >Retenção de logs (dias)
+            <input name="logRetentionDays" type="number" min="1" max="3650" /></label
+          ><label
+            ><input name="pruneLogs" type="checkbox" />Permitir limpeza adicional de logs
+            diagnósticos</label
+          >
+          <p>
+            Os limites anteriores dos logs operacionais continuam aplicados. Contatos, mensagens,
+            anexos e auditoria não são apagados por esta manutenção.
+          </p>
+          <label
+            ><input name="authorizeDeletion" type="checkbox" />Autorizo especificamente a limpeza
+            habilitada acima</label
+          ><label><input name="confirmed" type="checkbox" required />Confirmo a configuração</label
+          ><button>Salvar manutenção</button>
+        </form>
+        <label><input id="backup-confirm" type="checkbox" />Solicito criar um backup agora</label
+        ><button id="backup-run">Criar e verificar backup</button>
+        <pre id="maintenance-result"></pre>
+      </section>
+    </main>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

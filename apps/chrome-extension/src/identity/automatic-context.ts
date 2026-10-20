@@ -1,3 +1,4 @@
+import { conversationRowLabel } from '../adapters/conversation-label.js';
 import type { CaptureObservation, ConversationIdentity } from '@wai-bridge/shared';
 import { visiblePeerDetails } from './visible-peer-details.js';
 import { GroupDetector } from '../adapters/group-detector.js';
@@ -6,13 +7,22 @@ import { GroupDetector } from '../adapters/group-detector.js';
 export class AutomaticContext {
   private readonly rows = new WeakMap<Element, { label: string; key: string }>();
   private active:
-    | { root: HTMLElement; row: Element | null; label: string; identity: ConversationIdentity }
+    | {
+        root: HTMLElement;
+        row: Element | null;
+        label: string;
+        identity: ConversationIdentity;
+        anchors: string[];
+      }
     | undefined;
   constructor(
     private readonly accountId: string,
     private readonly doc: Document = document,
   ) {}
 
+  get localAccountId(): string {
+    return this.accountId;
+  }
   current(): ConversationIdentity | undefined {
     const roots = this.doc.querySelectorAll<HTMLElement>('#main, [data-wai-active-conversation]');
     if (roots.length !== 1) {
@@ -32,9 +42,18 @@ export class AutomaticContext {
     const details = visiblePeerDetails(this.doc, label);
     const kind = details.kind === 'UNKNOWN' ? new GroupDetector().kind(root) : details.kind;
     const previous = this.active;
+    const anchors = [...root.querySelectorAll('[data-testid^="conv-msg-"]')]
+      .map((e) => e.getAttribute('data-testid')!)
+      .filter((value) => value.length <= 256)
+      .slice(-3);
+    const sameVisibleMessages =
+      previous?.anchors.some((marker) => anchors.includes(marker)) ?? false;
+    const sameRowOrRedraw =
+      previous &&
+      (previous.row === row || (sameVisibleMessages && (!row || !previous.row?.isConnected)));
     if (
       previous?.root === root &&
-      previous.row === row &&
+      sameRowOrRedraw &&
       previous.label === label &&
       previous.identity.type === 'UI_CONTEXT'
     ) {
@@ -47,6 +66,11 @@ export class AutomaticContext {
       ) {
         if (row) this.rows.delete(row);
       } else {
+        previous.anchors = anchors;
+        if (row) {
+          previous.row = row;
+          this.rows.set(row, { label, key: prior.conversationKey });
+        }
         previous.identity = {
           ...prior,
           conversationKind: prior.conversationKind === 'UNKNOWN' ? kind : prior.conversationKind,
@@ -71,11 +95,41 @@ export class AutomaticContext {
       contextId: crypto.randomUUID(),
       confirmedAt: new Date().toISOString(),
     };
-    this.active = { root, row, label, identity };
+    this.active = { root, row, label, identity, anchors };
     return identity;
   }
 
+  private forRow(element: HTMLElement, at: string): ConversationIdentity | undefined {
+    const row = element.closest('[role="row"]') ?? element;
+    const label = conversationRowLabel(element);
+    if (!label) return undefined;
+    let reference = this.rows.get(row);
+    if (!reference || reference.label !== label) {
+      reference = { label, key: crypto.randomUUID() };
+      this.rows.set(row, reference);
+    }
+    return {
+      version: 1,
+      type: 'UI_CONTEXT',
+      source: 'VISIBLE_UI',
+      accountId: this.accountId,
+      contextId: crypto.randomUUID(),
+      confirmedAt: at,
+      conversationKey: reference.key,
+      conversationKind: new GroupDetector().kind(element),
+    };
+  }
   enrich(observation: CaptureObservation, root?: HTMLElement): CaptureObservation {
+    if (observation.observationType === 'CONVERSATION_ACTIVITY') {
+      const identity = root ? this.forRow(root, observation.observedAt) : undefined;
+      return identity?.type === 'UI_CONTEXT'
+        ? {
+            ...observation,
+            identity,
+            conversation: { ...observation.conversation, kind: identity.conversationKind },
+          }
+        : observation;
+    }
     let identity = this.current();
     if (
       identity?.type !== 'UI_CONTEXT' ||

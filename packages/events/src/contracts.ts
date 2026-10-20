@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const EventTypeSchema = z.enum([
   'message.detected',
   'message.captured',
+  'message.updated',
   'message.received',
   'message.sent',
   'contact.detected',
