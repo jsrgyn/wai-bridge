@@ -1,0 +1,23 @@
+{
+  "extraKnownMarketplaces": {
+    "superpowers-marketplace": {
+      "source": { "source": "github", "repo": "obra/superpowers-marketplace" }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers@superpowers-marketplace": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pnpm lint)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm build)",
+      "Bash(pnpm test)",
+      "Bash(pnpm test:integration)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git worktree:*)"
+    ],
+    "deny": ["Read(.env)", "Read(.env.*)", "Bash(git push:*)"]
+  }
+}

@@ -29,3 +29,7 @@ Na implementação do schema 16 foram observados: `pnpm build`, `pnpm lint`, `pn
 Este arquivo é versionado em um repositório público. Deve conter apenas fatos técnicos genéricos e resultados de testes sintéticos. Não registrar nomes de interlocutores, corpos de mensagens, números, e-mails, IDs de execução, caminhos absolutos de usuário, estado de uma conta real ou contagens obtidas de dados privados.
 
 As regras públicas e o hook local agora bloqueiam arquivos privados conhecidos, artefatos binários de risco, identidade Git pessoal e segredos detectáveis em mudanças staged. Gitleaks não encontrou achados nos arquivos atuais; em repositório temporário, o hook passou com fixture segura e bloqueou caminho privado e uma chave sintética staged. O histórico Git publicado não foi reescrito; commits já existentes mantêm seus metadados e cópias remotas. Racional, alternativas, consequências e evidências desta proteção estão registrados no [ADR 0022](../decisions/0022-public-repository-privacy-hardening.md).
+
+## Ferramentas de agentes
+
+Em 2026-10-22 foram adicionados `.claude/settings.json` (habilita o plugin Superpowers no escopo do projeto e define permissões), `CLAUDE.md` (importa o `AGENTS.md` e adapta as convenções do plugin) e a entrada `.worktrees/` no `.gitignore`, conforme o [ADR 0023](../decisions/0023-superpowers-agent-workflow.md). Não houve alteração de código de aplicação. A instalação do plugin em cada máquina não foi verificada.
