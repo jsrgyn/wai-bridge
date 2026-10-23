@@ -524,7 +524,7 @@ it('accepts a direct-number MCP intent without an existing recipient conversatio
   const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,confirmedAt:new Date().toISOString()};
   expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,allowClaim:true}})).statusCode).toBe(200);
   const created=await tool('whatsapp_send_to_number',{phoneNumber:'+1 (202) 555-0199',text:'Synthetic direct-number message',mode:'AUTO',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-direct-number'});
-  expect(created).toMatchObject({status:'REQUESTED',inserted:true});
+  expect(created).toMatchObject({status:'QUEUED',inserted:true});
   expect(db.prepare('SELECT count(*) n FROM wa_conversations').get()).toEqual({n:1});
   const status=await tool('whatsapp_get_outbox_status',{id:created.id});
   expect(JSON.parse(status.command.payload_json)).toMatchObject({recipientPhone:'+12025550199',locateByPhone:true,target:{accountId:identity.accountId}});
@@ -536,7 +536,7 @@ it('resolves a named MCP request through SQLite and persists only a phone-search
   expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,conversationLabel:'Synthetic Esposa',allowClaim:true,ready:false}})).statusCode).toBe(200);
   const created=await tool('whatsapp_send_to_contact',{recipientName:'esposa',text:'Synthetic named request',mode:'SUPERVISED',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-named-contact'});
   const status=await tool('whatsapp_get_outbox_status',{id:created.id});
-  expect(status.command.status).toBe('REQUESTED');
+  expect(status.command.status).toBe('QUEUED');
   expect(JSON.parse(status.command.payload_json)).toMatchObject({recipientPhone:'+12025550199',locateByPhone:true,nameRequest:{recipientName:'esposa'}});
 });
 
@@ -545,7 +545,7 @@ it('correlates MCP/API/SQLite sends and capture reads without retaining private 
  const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,phone:'+12025550199',confirmedAt:new Date().toISOString()};
  await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,conversationLabel:'SYNTHETIC_PRIVATE_NAME'}});
  const created=await tool('whatsapp_send_to_number',{phoneNumber:identity.phone,text:'SYNTHETIC_PRIVATE_TEXT',mode:'SUPERVISED',explicitAuthorization:true,idempotencyKey:'synthetic-flow-command-key'});await api.flushLogs();
- const logs=await tool('whatsapp_get_flow_logs',{resourceId:created.id});expect(logs.commandStatus).toBe('REQUESTED');expect(logs.resolvedTraceId).toBe(created.traceId);expect(new Set(logs.items.map((e:{component:string})=>e.component))).toEqual(new Set(['MCP','API','SQLITE']));
+ const logs=await tool('whatsapp_get_flow_logs',{resourceId:created.id});expect(logs.commandStatus).toBe('QUEUED');expect(logs.resolvedTraceId).toBe(created.traceId);expect(new Set(logs.items.map((e:{component:string})=>e.component))).toEqual(new Set(['MCP','API','SQLITE']));
  const text=JSON.stringify(logs);for(const secret of ['SYNTHETIC_PRIVATE_TEXT','SYNTHETIC_PRIVATE_NAME',identity.phone,token])expect(text).not.toContain(secret);
  const value=observation({identity,conversation:{label:'SYNTHETIC_PRIVATE_NAME',kind:'INDIVIDUAL'},content:'SYNTHETIC_PRIVATE_CAPTURE',media:[],observedAt:new Date(Date.now()+1000).toISOString()});expect((await capture(value)).statusCode).toBe(202);
  await tool('whatsapp_get_messages');await api.flushLogs();const captureLogs=await tool('whatsapp_get_flow_logs',{resourceId:value.observationId});expect(captureLogs.items).toContainEqual(expect.objectContaining({component:'MCP',phase:'CAPTURE_READ'}));expect(JSON.stringify(captureLogs)).not.toContain(value.content!);
