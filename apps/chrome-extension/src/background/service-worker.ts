@@ -466,10 +466,29 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
   respond({ ok: false, error: 'INVALID_MESSAGE' });
 });
 
+const KEEPALIVE_ALARM = 'wai-send-keepalive';
+async function ensureKeepAlive(): Promise<void> {
+  // Idempotent: MV3 workers restart, so every entry point re-checks the alarm.
+  if (!(await chrome.alarms.get(KEEPALIVE_ALARM)))
+    chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== KEEPALIVE_ALARM) return;
+  void (async () => {
+    await connectNative();
+    if (!syncBridge.busy) await sendBridge.poll();
+  })().catch(() => undefined);
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   // Keep the persisted monitoring intent across extension updates.
+  void ensureKeepAlive();
   void connectNative();
 });
 
-chrome.runtime.onStartup.addListener(() => void connectNative());
+chrome.runtime.onStartup.addListener(() => {
+  void ensureKeepAlive();
+  void connectNative();
+});
+void ensureKeepAlive();
 void connectNative();

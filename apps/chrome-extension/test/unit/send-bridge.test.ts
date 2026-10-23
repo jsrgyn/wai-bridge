@@ -41,6 +41,8 @@ function setup() {
     activations: 0,
     focus: 0,
     contextHung: false,
+    contextGone: false,
+    executing: undefined as string | null | undefined,
     acceptanceHung: false,
     tabs: [{ id: 5, windowId: 1, url: 'https://web.whatsapp.com/' }],
     requests: [] as { type: string; input: Record<string, unknown> }[],
@@ -56,7 +58,13 @@ function setup() {
     sendMessage: vi.fn(async (_id: number, message: { kind: string }) => {
       if (message.kind === 'SEND_CONTEXT') {
         if (state.contextHung) return new Promise(() => {});
-        return { ok: true, identity, ready: state.ready };
+        if (state.contextGone) throw new Error('Could not establish connection.');
+        return {
+          ok: true,
+          identity,
+          ready: state.ready,
+          ...(state.executing !== undefined ? { executing: state.executing } : {}),
+        };
       }
       if (message.kind === 'SEND_CANCEL') {
         state.cancels++;
@@ -210,5 +218,62 @@ it('never redelivers after a lost acceptance ACK and still polls the claimed com
   await bridge.poll();
   expect(state.executions).toBe(1);
   expect(state.requests.at(-1)?.input.activeCommand).toBeTruthy();
+  bridge.disconnect();
+});
+it('tab reload during COMPOSED (WAITING_USER) drops active and next poll omits activeCommand', async () => {
+  const { bridge, state, command, extensionInstanceId } = setup();
+  await bridge.poll();
+  await bridge.progress(
+    {
+      extensionInstanceId,
+      commandId: command.id,
+      contextId: command.contextId,
+      leaseToken: command.leaseToken,
+      step: 'WAITING_USER',
+      code: 'SYNTHETIC_WAIT',
+    },
+    5,
+  );
+  expect(bridge.busy).toBe(true);
+  state.contextGone = true; // reloading tab: no receiving end
+  state.queued = false;
+  await bridge.poll();
+  expect(state.requests.at(-1)?.input.activeCommand).toBeUndefined();
+  expect(bridge.busy).toBe(false);
+  state.contextGone = false;
+  state.executing = null; // reloaded page has no job
+  await bridge.poll();
+  expect(state.requests.at(-1)?.input).toMatchObject({ reason: 'READY', visible: true });
+  expect(state.requests.at(-1)?.input.activeCommand).toBeUndefined();
+  bridge.disconnect();
+});
+it('a reloaded content script that reports no job also drops active', async () => {
+  const { bridge, state } = setup();
+  await bridge.poll();
+  state.executing = null;
+  state.queued = false;
+  await bridge.poll();
+  expect(state.requests.at(-1)?.input.activeCommand).toBeUndefined();
+  expect(bridge.busy).toBe(false);
+  bridge.disconnect();
+});
+it('keeps active when the content script merely times out (never risks a double send)', async () => {
+  vi.useFakeTimers();
+  const { bridge, state } = setup();
+  await bridge.poll();
+  state.contextHung = true;
+  const next = bridge.poll();
+  await vi.advanceTimersByTimeAsync(1600);
+  await next;
+  expect(state.requests.at(-1)?.input.activeCommand).toBeTruthy();
+  expect(bridge.busy).toBe(true);
+  expect(state.executions).toBe(1);
+  bridge.disconnect();
+});
+it('reports NO_WHATSAPP_TAB even when no tab exists', async () => {
+  const { bridge, state } = setup();
+  state.tabs.length = 0;
+  await bridge.poll();
+  expect(state.requests.at(-1)?.input).toMatchObject({ reason: 'NO_WHATSAPP_TAB', ready: false });
   bridge.disconnect();
 });
