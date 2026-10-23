@@ -126,7 +126,8 @@ export class VisibleSendExecutor {
         command.appendToDraft,
         controller.signal,
       );
-      this.validate(command);
+      // Post-compose revalidation: contact, visibility and opt-in must still hold.
+      this.check(command, controller.signal);
       this.doc.body.append(box);
       emitFlow(this.logs, {
         traceId: command.traceId ?? command.id,
@@ -263,8 +264,8 @@ export class VisibleSendExecutor {
     return roots[0]!;
   }
   private recipientProof(command: ExtensionSendCommand) {
+    // Callers must revalidate first; the post-compose check is the single gate.
     if (!command.locateByPhone) return {};
-    this.validate(command);
     return {
       resolvedIdentity: this.resolved!.identity,
       conversationLabel: this.resolved!.root.querySelector(

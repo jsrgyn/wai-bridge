@@ -54,6 +54,8 @@ for (const scenario of [
   'drawer-opens-late',
   'search-busy',
   'supervised',
+  'supervised-context-change',
+  'supervised-hidden',
   'not-found',
   'profile-open',
   'profile-controls',
@@ -322,6 +324,22 @@ for (const scenario of [
           appendToDraft: false,
         });
       };
+      if (scenario === 'supervised-context-change' || scenario === 'supervised-hidden') {
+        // Change the context right after the composer receives the text: the
+        // post-compose revalidation must block DRAFTED.
+        const original = document.execCommand.bind(document);
+        document.execCommand = (name, ui, value) => {
+          const result = original(name, ui, value);
+          if (name !== 'insertText') return result;
+          if (scenario === 'supervised-hidden')
+            Object.defineProperty(document, 'hidden', { get: () => true });
+          else
+            document.querySelector(
+              '#main [data-testid="conversation-info-header-chat-title"]',
+            )!.textContent = 'Different synthetic contact';
+          return result;
+        };
+      }
       if (scenario === 'hidden-start') {
         let hidden = true;
         Object.defineProperty(document, 'hidden', { get: () => hidden });
@@ -381,6 +399,7 @@ for (const scenario of [
         state.phases.indexOf('CHAT_OPENED'),
       );
       expect(state.hiddenWrites).toBe(false);
+      // 'supervised' also proves a profile drawer closed by resetAfterVerify still validates.
       expect(state.clicks).toBe(scenario === 'supervised' ? 0 : 1);
       if (scenario === 'supervised')
         await expect(page.locator('#main footer [contenteditable]')).not.toBeEmpty();
@@ -408,6 +427,7 @@ for (const scenario of [
     } else {
       expect(state.clicks).toBe(0);
       expect(state.steps).not.toContain('SENDING');
+      expect(state.steps).not.toContain('DRAFTED');
       expect(state.steps.at(-1)).toBe('FAILED');
       if (scenario === 'no-navigation') {
         expect(state.phases).toContain('CHAT_OPEN_STARTED');
@@ -429,6 +449,8 @@ for (const scenario of [
           'profile-change': 'RECIPIENT_PHONE_MISMATCH',
           group: 'RECIPIENT_IS_GROUP',
           'user-interference': 'USER_INTERFERENCE',
+          'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
+          'supervised-hidden': 'WHATSAPP_TAB_NOT_VISIBLE',
         }[
           scenario as Exclude<
             typeof scenario,
