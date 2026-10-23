@@ -2,6 +2,10 @@ import {
   ManagementRequestSchema,
   ContactCatalogSchema,
   MaintenancePolicySchema,
+  SendTimingSchema,
+  ExtensionSendQueueSchema,
+  DEFAULT_SEND_TIMING,
+  type SendTiming,
 } from '@wai-bridge/shared';
 import { z } from 'zod';
 const element = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -131,6 +135,8 @@ async function refresh() {
     list.append(button);
   }
   await maintenanceLoad();
+  await sendTimingLoad();
+  await sendQueueLoad();
 }
 let contactsCursor: string | null = null,
   contactQuery: Record<string, string> = {};
@@ -349,5 +355,138 @@ click('backup-run', async () => {
   );
   element<HTMLInputElement>('backup-confirm').checked = false;
 });
+const TIMING_FIELDS = [
+  { input: 'autoCountdownS', key: 'autoCountdownMs', factor: 1000, unit: 's' },
+  { input: 'executionTimeoutS', key: 'executionTimeoutMs', factor: 1000, unit: 's' },
+  { input: 'queueMaxWaitMin', key: 'queueMaxWaitMs', factor: 60000, unit: 'min' },
+  { input: 'sendVerifyS', key: 'sendVerifyMs', factor: 1000, unit: 's' },
+] as const;
+function fillTiming(timing: SendTiming) {
+  const form = element<HTMLFormElement>('send-timing');
+  for (const { input, key, factor } of TIMING_FIELDS) {
+    const value = timing[key];
+    if (value === null) continue;
+    field(form, input).value = String(value / factor);
+  }
+  const unlimited = timing.queueMaxWaitMs === null;
+  field(form, 'queueUnlimited').checked = unlimited;
+  field(form, 'queueMaxWaitMin').disabled = unlimited;
+  if (unlimited) field(form, 'queueMaxWaitMin').value = '';
+  else if (!field(form, 'queueMaxWaitMin').value)
+    field(form, 'queueMaxWaitMin').value = String(DEFAULT_SEND_TIMING.queueMaxWaitMs! / 60000);
+  clearTimingErrors();
+}
+function clearTimingErrors() {
+  for (const node of element('send-timing').querySelectorAll('[data-error-for]'))
+    node.textContent = '';
+}
+async function sendTimingLoad() {
+  fillTiming(SendTimingSchema.parse(await request({ operation: 'SEND_SETTINGS_GET' })));
+}
+function collectTiming(form: HTMLFormElement) {
+  clearTimingErrors();
+  const input: Record<string, number | null> = {};
+  let valid = true;
+  for (const { input: name, key, factor, unit } of TIMING_FIELDS) {
+    if (key === 'queueMaxWaitMs' && field(form, 'queueUnlimited').checked) {
+      input[key] = null;
+      continue;
+    }
+    const raw = field(form, name).value.trim();
+    const bounds = SendTimingSchema.shape[key];
+    const value = raw === '' ? Number.NaN : Math.round(Number(raw) * factor);
+    const parsed = bounds.safeParse(value);
+    if (parsed.success) input[key] = parsed.data;
+    else {
+      valid = false;
+      const min = Number(field(form, name).min);
+      const max = Number(field(form, name).max);
+      element('send-timing').querySelector(`[data-error-for="${name}"]`)!.textContent =
+        `Informe um valor entre ${min} e ${max} ${unit === 's' ? 'segundos' : 'minutos'}.`;
+    }
+  }
+  if (!valid) throw new z.ZodError([]);
+  return input;
+}
+element<HTMLInputElement>('send-timing')
+  .querySelector<HTMLInputElement>('[name=queueUnlimited]')!
+  .addEventListener('change', (event) => {
+    const form = element<HTMLFormElement>('send-timing');
+    field(form, 'queueMaxWaitMin').disabled = (event.target as HTMLInputElement).checked;
+  });
+submit('send-timing', async (form) => {
+  await request({ operation: 'SEND_SETTINGS_UPDATE', input: collectTiming(form) });
+});
+click('send-timing-reset', async () => {
+  fillTiming(DEFAULT_SEND_TIMING);
+  await request({ operation: 'SEND_SETTINGS_UPDATE', input: DEFAULT_SEND_TIMING });
+});
+const SEND_STATUS_LABELS: Record<string, string> = {
+  QUEUED: 'Na fila',
+  WAITING_WHATSAPP: 'Aguardando WhatsApp',
+  CLAIMED: 'Em execução',
+  TARGET_VERIFIED: 'Em execução',
+  COMPOSED: 'Em execução',
+  WAITING_AUTO_SEND: 'Em execução',
+  SENDING: 'Em execução',
+  DRAFTED: 'Rascunho pronto',
+  SENT: 'Enviado',
+  UNKNOWN: 'Resultado incerto',
+  FAILED: 'Falhou',
+  CANCELLED: 'Cancelado',
+};
+const SEND_CANCELLABLE = new Set([
+  'QUEUED',
+  'WAITING_WHATSAPP',
+  'CLAIMED',
+  'TARGET_VERIFIED',
+  'COMPOSED',
+  'WAITING_AUTO_SEND',
+]);
+async function sendQueueLoad() {
+  const queue = ExtensionSendQueueSchema.parse(await request({ operation: 'SEND_QUEUE' }));
+  const banner = element('send-paused');
+  banner.hidden = !queue.paused;
+  banner.textContent = queue.paused
+    ? `Fila pausada: ${queue.pauseReason ?? 'motivo não informado'}`
+    : '';
+  const list = element('send-queue');
+  list.replaceChildren();
+  if (queue.items.length === 0) list.textContent = 'Nenhum envio na fila.';
+  for (const item of queue.items) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const text = document.createElement('span');
+    text.textContent = [
+      item.position === null ? '—' : `#${item.position}`,
+      item.mode === 'AUTO' ? 'Automático' : 'Supervisionado',
+      SEND_STATUS_LABELS[item.status] ?? item.status,
+      `${item.attempts} ${item.attempts === 1 ? 'tentativa' : 'tentativas'}`,
+      ...(item.resultCode ? [item.resultCode] : []),
+    ].join(' · ');
+    card.append(text);
+    if (SEND_CANCELLABLE.has(item.status)) {
+      const cancel = document.createElement('button');
+      cancel.textContent = 'Cancelar';
+      cancel.addEventListener(
+        'click',
+        action(async () => {
+          await request({ operation: 'SEND_CANCEL', id: item.id });
+          await sendQueueLoad();
+        }),
+      );
+      card.append(cancel);
+    }
+    list.append(card);
+  }
+}
+function pollQueue() {
+  if (document.visibilityState !== 'visible') return;
+  sendQueueLoad().catch(() => {
+    element('send-paused').hidden = true;
+  });
+}
+setInterval(pollQueue, 3000);
+document.addEventListener('visibilitychange', pollQueue);
 click('refresh', refresh);
 action(refresh)();
