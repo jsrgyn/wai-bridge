@@ -62,8 +62,9 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
     payload: {
       ...(direct?{phoneNumber:'+12025550199'}:{conversationId}),
       text: 'Synthetic manual reply',
-      mode: 'SUPERVISED',
+      mode: 'AUTO',
       explicitAuthorization: true,
+      timing: { autoCountdownMs: 0 },
       ...(!direct&&locateByPhone?{locateByPhone:true}:{}),
     },
   });
@@ -136,9 +137,11 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
     expect(command).toMatchObject({
       id: created.json().id,
       contextId: pollIdentity.contextId,
-      mode: 'SUPERVISED',
+      mode: 'AUTO',
+      timing: { autoCountdownMs: 0 },
+      appendToDraft: false,
     });
-    for (const step of ['WAITING_USER', 'SENDING', 'SENT'] as const) {
+    for (const step of ['WAITING_AUTO_SEND', 'SENDING', 'SENT'] as const) {
       const result = await send({
         type: 'SEND_PROGRESS',
         input: {
@@ -148,7 +151,7 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
           leaseToken: command.leaseToken,
           step,
           code: 'SYNTHETIC_NATIVE_STEP',
-          ...(locateByPhone && step === 'WAITING_USER' ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
+          ...(locateByPhone && step === 'WAITING_AUTO_SEND' ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
           ...(step === 'SENT' ? { evidence: `visible-outbound:${'b'.repeat(64)}` } : {}),
         },
       } as Omit<NativeRequest, 'version' | 'id'>);
