@@ -347,6 +347,17 @@ test('AUTO with appendToDraft fails without touching the pending draft', async (
   expect(state.steps).not.toContain('SENDING');
   expect(await composerText(page)).toBe('Synthetic first note');
 });
+test('AUTO after an earlier DRAFTED sends when the target composer is empty', async ({ page }) => {
+  await setup(page, 'AUTO', {
+    text: 'Synthetic second note',
+    appendToDraft: true,
+    autoCountdownMs: 0,
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'SENT'] });
+});
 test('append fails closed when the line break is not rendered', async ({ page }) => {
   await setup(page, 'SUPERVISED', {
     draft: 'Synthetic first note',

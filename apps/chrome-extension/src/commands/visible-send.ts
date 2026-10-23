@@ -113,7 +113,12 @@ export class VisibleSendExecutor {
       await search?.resetAfterVerify();
       this.check(command, controller.signal);
       // AUTO must not send a combined draft nor destroy a pending one: fail before touching it.
-      if (command.mode === 'AUTO' && command.appendToDraft)
+      // An empty target composer has nothing to lose, so AUTO proceeds on the replace path.
+      if (
+        command.mode === 'AUTO' &&
+        command.appendToDraft &&
+        messageText(this.composer(root)).trim() !== ''
+      )
         throw new Error('DRAFT_PENDING_ON_TARGET');
       const baseline = new Set(
         root.querySelectorAll<HTMLElement>('[data-testid="msg-container"], .message-out'),
@@ -126,7 +131,7 @@ export class VisibleSendExecutor {
       const composer = await this.prepareComposer(
         command,
         root,
-        command.appendToDraft,
+        command.mode === 'SUPERVISED' && command.appendToDraft,
         controller.signal,
       );
       // Post-compose revalidation: contact, visibility and opt-in must still hold.
