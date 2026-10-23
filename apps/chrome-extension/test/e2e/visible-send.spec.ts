@@ -12,6 +12,7 @@ declare global {
     };
     __state: TestState;
     __start: () => void;
+    __startNext: (text: string, appendToDraft: boolean) => void;
     __result: Promise<void>;
     __executor: VisibleSendExecutor;
     __identity: IdentityContext;
@@ -41,12 +42,15 @@ async function setup(
     draft?: string;
     autoCountdownMs?: number;
     sendVerifyMs?: number;
+    appendToDraft?: boolean;
+    text?: string;
+    otherChatDraft?: string;
   } = {},
 ) {
   await page.route('https://wai.test/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
-      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>`,
+      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>${options.otherChatDraft === undefined ? '' : `<section id="other-chat"><footer><div id="other-composer" contenteditable="true" style="min-height:24px">${options.otherChatDraft}</div></footer></section>`}`,
     }),
   );
   await page.goto('https://wai.test/');
@@ -69,7 +73,7 @@ async function setup(
         leaseToken: '44444444-4444-4444-8444-444444444444',
         contextId: bound.contextId,
         target: { accountId: bound.accountId, type: 'PHONE', referenceKey: bound.phone },
-        text: 'Synthetic good night ❤️',
+        text: options.text ?? 'Synthetic good night ❤️',
         mode,
         explicitAuthorization: true,
         leaseUntil: new Date(Date.now() + 180_000).toISOString(),
@@ -79,7 +83,7 @@ async function setup(
           queueMaxWaitMs: 1800000,
           sendVerifyMs: options.sendVerifyMs ?? 15000,
         },
-        appendToDraft: false,
+        appendToDraft: options.appendToDraft ?? false,
       };
       win.__state = { clicks: 0, steps: [], beforeSending: false };
       const executor = new win.__waiClasses.VisibleSendExecutor(
@@ -111,6 +115,15 @@ async function setup(
       });
       win.__start = () => {
         win.__result = executor.execute(command);
+      };
+      win.__startNext = (text: string, appendToDraft: boolean) => {
+        win.__result = executor.execute({
+          ...command,
+          id: '55555555-5555-4555-8555-555555555555',
+          leaseToken: '66666666-6666-4666-8666-666666666666',
+          text,
+          appendToDraft,
+        });
       };
     },
     { mode, options },
@@ -259,3 +272,59 @@ for (const behavior of [
     expect(state).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
   });
 }
+
+async function composerText(page: Page) {
+  return page.getByRole('textbox').evaluate((e) => (e as HTMLElement).innerText.trim());
+}
+test('second supervised request to same target appends on new line', async ({ page }) => {
+  await setup(page, 'SUPERVISED', { text: 'Synthetic first note' });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  await page.evaluate(() => window.__startNext('Synthetic second note', true));
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED', 'DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic first note\nSynthetic second note');
+});
+test('user-edited draft is preserved and new text appended at end', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note, edited by user',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe(
+    'Synthetic first note, edited by user\nSynthetic second note',
+  );
+});
+test('foreign text in target composer is erased when no earlier DRAFTED', async ({ page }) => {
+  await setup(page, 'SUPERVISED', { draft: 'Foreign synthetic text', appendToDraft: false });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic good night ❤️');
+});
+test('requeued append does not duplicate text', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note<br>Synthetic second note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic first note\nSynthetic second note');
+});
+test('composer of a different chat is never touched', async ({ page }) => {
+  for (const appendToDraft of [false, true]) {
+    await setup(page, 'SUPERVISED', {
+      draft: 'Synthetic first note',
+      text: 'Synthetic second note',
+      appendToDraft,
+      otherChatDraft: 'Other synthetic chat draft',
+    });
+    await start(page);
+    expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+    await expect(page.locator('#other-composer')).toHaveText('Other synthetic chat draft');
+    expect(await composerText(page)).toBe(
+      appendToDraft ? 'Synthetic first note\nSynthetic second note' : 'Synthetic second note',
+    );
+  }
+});

@@ -290,9 +290,12 @@ export class VisibleSendExecutor {
     return fields[0]!;
   }
   /**
-   * Replace-only for now: select everything in the target composer, delete it and
-   * insert the command text once. Erasing first means a requeued job never duplicates
-   * its own earlier text. `appendToDraft` is reserved for the append branch.
+   * Prepare the target composer (only after the target chat is open and validated).
+   * - appendToDraft with non-empty composer: keep everything already there (including the
+   *   user's edits), move the caret to the end and insert a line break plus the text.
+   *   If the composer already ends with the text (requeue), insert nothing.
+   * - Otherwise: select everything, delete it and insert the text once.
+   * The line break uses `insertLineBreak`; no Enter key is ever dispatched, so it cannot send.
    */
   private async prepareComposer(
     command: ExtensionSendCommand,
@@ -300,40 +303,52 @@ export class VisibleSendExecutor {
     appendToDraft: boolean,
     signal: AbortSignal,
   ): Promise<HTMLElement> {
-    void appendToDraft;
     const composer = this.composer(root);
-    const expected = command.text.normalize('NFC');
+    const text = command.text.normalize('NFC').trim();
     const stable = () => {
       this.check(command, signal);
       if (!composer.isConnected || this.composer(this.validate(command)) !== composer)
         throw new Error('COMPOSE_FAILED');
     };
-    composer.focus();
-    if (messageText(composer)) {
-      const selection = this.doc.getSelection();
-      const range = this.doc.createRange();
-      range.selectNodeContents(composer);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      this.doc.execCommand('delete', false);
-      const clearDeadline = Date.now() + 1000;
-      while (messageText(composer)) {
+    const waitFor = async (done: () => boolean) => {
+      const deadline = Date.now() + 1000;
+      while (!done()) {
         stable();
-        if (Date.now() >= clearDeadline) throw new Error('COMPOSE_FAILED');
+        if (Date.now() >= deadline) throw new Error('COMPOSE_FAILED');
         await delay(50, signal);
       }
+    };
+    composer.focus();
+    const prior = messageText(composer);
+    const append = appendToDraft && prior !== '';
+    if (append && prior.endsWith(text)) {
+      stable();
+      return composer;
+    }
+    const selection = this.doc.getSelection();
+    const range = this.doc.createRange();
+    range.selectNodeContents(composer);
+    if (append) range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (append) {
+      stable();
+      this.doc.execCommand('insertLineBreak', false);
+    } else if (prior) {
+      this.doc.execCommand('delete', false);
+      await waitFor(() => !messageText(composer));
     }
     stable();
     // Chromium/editor handlers may insert successfully while returning false.
     // Observe the rendered editor instead of treating that boolean as evidence.
     // Insert exactly once: never retry, so text is never duplicated.
     this.doc.execCommand('insertText', false, command.text);
-    const composeDeadline = Date.now() + 1000;
-    while (messageText(composer) !== expected) {
-      stable();
-      if (Date.now() >= composeDeadline) throw new Error('COMPOSE_FAILED');
-      await delay(50, signal);
-    }
+    await waitFor(() => {
+      const current = messageText(composer);
+      return append
+        ? current.startsWith(prior) && current.endsWith(text) && current.length > prior.length
+        : current === text;
+    });
     return composer;
   }
   private async verify(
