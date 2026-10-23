@@ -13,7 +13,7 @@ it('creates a private consistent backup and validates a restored copy without de
     expect(result.status).toBe('VERIFIED');
     expect((await stat(join(dir, 'backups', result.fileName))).mode & 0o777).toBe(0o600);
     expect(await verifyRestoredBackup(join(dir, 'backups', result.fileName))).toBe(true);
-    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 16 });
+    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 17 });
     await service.tick();
     expect(db.prepare('SELECT count(*) n FROM wa_backup_runs').get()).toEqual({ n: 1 });
   } finally {

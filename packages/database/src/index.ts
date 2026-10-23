@@ -25,3 +25,4 @@ export { DialogueSyncBatchRepository } from './repositories/dialogue-sync-batch.
 export {OperationsRepository} from './repositories/operations.js';
 
 export {MaintenanceService,verifyRestoredBackup} from './maintenance.js';
+export { SendSettingsRepository } from './repositories/send-settings.js';

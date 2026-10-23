@@ -32,6 +32,7 @@ export const migrations: readonly Migration[] = [
   loadMigration(14, 'conversation-review', '014-conversation-review.sql'),
   loadMigration(15, 'contact-directory-and-sync-batches', '015-contact-directory-and-sync-batches.sql'),
   loadMigration(16, 'operational-management', '016-operational-management.sql'),
+  loadMigration(17, 'send-queue', '017-send-queue.sql'),
 ];
 
 export function applyMigrations(

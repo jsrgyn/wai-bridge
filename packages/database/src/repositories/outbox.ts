@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 
-export const OutboxStatusSchema=z.enum(['REQUESTED','QUEUED','CLAIMED','TARGET_VERIFIED','COMPOSED','WAITING_AUTO_SEND','WAITING_USER','SENDING','SENT','UNKNOWN','FAILED','CANCELLED']);
+export const OutboxStatusSchema=z.enum(['REQUESTED','QUEUED','CLAIMED','TARGET_VERIFIED','COMPOSED','WAITING_AUTO_SEND','WAITING_USER','WAITING_WHATSAPP','DRAFTED','SENDING','SENT','UNKNOWN','FAILED','CANCELLED']);
 export type OutboxStatus=z.infer<typeof OutboxStatusSchema>;
 export interface OutboxCommand {id:string;kind:string;idempotencyScope:string;idempotencyKey:string;status:OutboxStatus;payload:unknown;createdAt:string;updatedAt:string;leaseOwner:string|null;leaseUntil:string|null;attemptCount:number;nextAttemptAt:string|null;executionStartedAt:string|null;resultCode:string|null;resultRef:string|null;authorizationRef:string|null}
 const ISO=z.iso.datetime();
