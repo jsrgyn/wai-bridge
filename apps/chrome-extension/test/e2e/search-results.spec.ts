@@ -128,7 +128,7 @@ for (const scenario of [
         } catch (error) {
           code = error instanceof Error ? error.message : 'FAILED';
         } finally {
-          search.release(controller.signal);
+          await search.release(controller.signal);
         }
         return { code, opened, profileClicks, elapsed: Date.now() - start };
       })();
@@ -145,6 +145,12 @@ for (const scenario of [
       expect(result.profileClicks).toBe(1);
       if (['delayed', 'busy'].includes(scenario))
         expect(result.elapsed).toBeGreaterThanOrEqual(1500);
+      // Search box empty, drawers closed, target chat still open.
+      await expect(page.locator('input')).toHaveValue('');
+      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
+      await expect(
+        page.locator('#main [data-testid="conversation-info-header-chat-title"]'),
+      ).toHaveText('Synthetic recipient');
     } else if (scenario === 'wrong-phone') {
       expect(result.code).toBe('RECIPIENT_PHONE_MISMATCH');
       expect(result.opened).toEqual(['Synthetic recipient']);

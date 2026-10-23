@@ -48,6 +48,9 @@ for (const scenario of [
   'already-verified-profile',
   'direct-number',
   'directory',
+  'directory-drawer-stays',
+  'new-chat-open',
+  'search-busy',
   'supervised',
   'supervised-context-change',
   'supervised-profile-closed',
@@ -61,7 +64,6 @@ for (const scenario of [
   'ambiguous',
   'draft',
   'wrong-account',
-  'search-busy',
   'profile-change',
   'group',
   'user-interference',
@@ -113,6 +115,13 @@ for (const scenario of [
         document.body.append(drawer);
       }
       if (scenario === 'search-busy') input.value = 'Synthetic user search';
+      const withBack = (drawer: HTMLElement) => {
+        const back = document.createElement('button');
+        back.setAttribute('aria-label', 'Voltar');
+        back.textContent = 'Back synthetic';
+        back.addEventListener('click', () => drawer.remove());
+        drawer.prepend(back);
+      };
       if (scenario === 'draft')
         document.querySelector('[contenteditable]')!.textContent = 'Synthetic draft';
       const onSearch = (field: HTMLInputElement) => {
@@ -126,7 +135,7 @@ for (const scenario of [
         list.replaceChildren();
         if (
           scenario === 'not-found' ||
-          (['directory', 'directory-press'].includes(scenario) &&
+          (['directory', 'directory-press', 'directory-drawer-stays'].includes(scenario) &&
             !input.closest('[data-testid="new-chat-drawer"]'))
         )
           return;
@@ -165,7 +174,8 @@ for (const scenario of [
                 document.activeElement !== selectionTarget)
             )
               throw new Error('SYNTHETIC_WRONG_SELECTION_TARGET');
-            input.closest('[data-testid="new-chat-drawer"]')?.remove();
+            if (scenario !== 'directory-drawer-stays')
+              input.closest('[data-testid="new-chat-drawer"]')?.remove();
             row.querySelector('[aria-selected]')!.setAttribute('aria-selected', 'true');
             const updateHeader = () => {
               document.querySelector(
@@ -208,7 +218,17 @@ for (const scenario of [
         }
       };
       input.addEventListener('input', () => onSearch(input));
-      if (['directory', 'directory-press', 'not-found'].includes(scenario)) {
+      if (scenario === 'new-chat-open') {
+        const leftover = document.createElement('aside');
+        leftover.setAttribute('data-testid', 'new-chat-drawer');
+        leftover.innerHTML =
+          '<h2>Nova conversa</h2><input aria-label="Pesquisar nome, número ou @nomedeusuário" value="Synthetic leftover"/><section></section>';
+        withBack(leftover);
+        document.body.append(leftover);
+      }
+      if (
+        ['directory', 'directory-press', 'directory-drawer-stays', 'not-found'].includes(scenario)
+      ) {
         const newChat = document.createElement('button');
         newChat.setAttribute('aria-label', 'Nova conversa');
         newChat.textContent = 'New synthetic chat';
@@ -217,6 +237,7 @@ for (const scenario of [
           drawer.setAttribute('data-testid', 'new-chat-drawer');
           drawer.innerHTML =
             '<h2>Nova conversa</h2><input aria-label="Pesquisar nome, número ou @nomedeusuário"/><section></section>';
+          withBack(drawer);
           document.body.append(drawer);
           const directoryInput = drawer.querySelector('input')!;
           directoryInput.addEventListener('input', () => onSearch(directoryInput));
@@ -362,6 +383,9 @@ for (const scenario of [
         'profile-controls',
         'hidden-start',
         'directory',
+        'directory-drawer-stays',
+        'new-chat-open',
+        'search-busy',
         'supervised',
         'supervised-profile-closed',
         'supervised-hidden',
@@ -385,8 +409,21 @@ for (const scenario of [
       expect(state.searches).toEqual(
         ['directory', 'directory-press'].includes(scenario)
           ? ['+12025550123', '', '+12025550123']
-          : ['+12025550123', ''],
+          : scenario === 'directory-drawer-stays'
+            ? ['+12025550123', '', '+12025550123', '']
+            : scenario === 'search-busy'
+              ? ['', '+12025550123', '']
+              : ['+12025550123', ''],
       );
+      // Initial UI state restored: search empty, drawers closed, target chat open.
+      await expect(
+        page.getByRole('textbox', { name: 'Pesquisar ou começar uma nova conversa' }),
+      ).toHaveValue('');
+      expect(await page.locator('[data-testid="new-chat-drawer"]').count()).toBe(0);
+      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
+      await expect(
+        page.locator('#main [data-testid="conversation-info-header-chat-title"]'),
+      ).toHaveText('Synthetic result');
     } else {
       expect(state.clicks).toBe(0);
       expect(state.steps).not.toContain('SENDING');
@@ -409,7 +446,6 @@ for (const scenario of [
           ambiguous: 'AMBIGUOUS_PHONE_RESULTS',
           draft: 'COMPOSER_HAS_DRAFT',
           'wrong-account': 'RECIPIENT_ACCOUNT_MISMATCH',
-          'search-busy': 'SEARCH_HAS_INPUT',
           'profile-change': 'RECIPIENT_PHONE_MISMATCH',
           'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
           group: 'RECIPIENT_IS_GROUP',
@@ -430,6 +466,9 @@ for (const scenario of [
             | 'profile-controls'
             | 'hidden-start'
             | 'directory'
+            | 'directory-drawer-stays'
+            | 'new-chat-open'
+            | 'search-busy'
             | 'supervised'
             | 'supervised-profile-closed'
             | 'supervised-hidden'
