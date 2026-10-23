@@ -3,7 +3,7 @@ import { build, stop } from 'esbuild';
 import type { VisibleSendExecutor } from '../../src/commands/visible-send.js';
 import type { IdentityContext } from '../../src/identity/context.js';
 import type { ExtensionSendCommand } from '@wai-bridge/shared';
-type TestState = { clicks: number; steps: string[]; beforeSending: boolean };
+type TestState = { clicks: number; steps: string[]; codes: string[]; beforeSending: boolean };
 declare global {
   interface Window {
     __waiClasses: {
@@ -85,11 +85,12 @@ async function setup(
         },
         appendToDraft: options.appendToDraft ?? false,
       };
-      win.__state = { clicks: 0, steps: [], beforeSending: false };
+      win.__state = { clicks: 0, steps: [], codes: [], beforeSending: false };
       const executor = new win.__waiClasses.VisibleSendExecutor(
         identity,
-        async (_command: unknown, step: { step: string }) => {
+        async (_command: unknown, step: { step: string; code: string }) => {
           win.__state.steps.push(step.step);
+          win.__state.codes.push(step.code);
           if (step.step === 'SENDING') {
             if (options.failSending) throw new Error('PROGRESS_UNAVAILABLE');
             win.__state.beforeSending = true;
@@ -327,4 +328,22 @@ test('composer of a different chat is never touched', async ({ page }) => {
       appendToDraft ? 'Synthetic first note\nSynthetic second note' : 'Synthetic second note',
     );
   }
+});
+test('AUTO with appendToDraft fails without touching the pending draft', async ({ page }) => {
+  await setup(page, 'AUTO', {
+    draft: 'Synthetic first note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+    autoCountdownMs: 0,
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({
+    clicks: 0,
+    steps: ['FAILED'],
+    codes: ['DRAFT_PENDING_ON_TARGET'],
+  });
+  expect(state.steps).not.toContain('SENDING');
+  expect(await composerText(page)).toBe('Synthetic first note');
 });

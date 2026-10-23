@@ -112,6 +112,9 @@ export class VisibleSendExecutor {
       // Leave the search empty and drawers closed while the verified chat stays open.
       await search?.resetAfterVerify();
       this.check(command, controller.signal);
+      // AUTO must not send a combined draft nor destroy a pending one: fail before touching it.
+      if (command.mode === 'AUTO' && command.appendToDraft)
+        throw new Error('DRAFT_PENDING_ON_TARGET');
       const baseline = new Set(
         root.querySelectorAll<HTMLElement>('[data-testid="msg-container"], .message-out'),
       );
