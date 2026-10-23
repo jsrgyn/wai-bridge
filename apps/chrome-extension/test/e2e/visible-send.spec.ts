@@ -66,6 +66,13 @@ async function setup(
         mode,
         explicitAuthorization: true,
         leaseUntil: new Date(Date.now() + 180_000).toISOString(),
+        timing: {
+          autoCountdownMs: 5000,
+          executionTimeoutMs: 60000,
+          queueMaxWaitMs: 1800000,
+          sendVerifyMs: 15000,
+        },
+        appendToDraft: false,
       };
       win.__state = { clicks: 0, steps: [], beforeSending: false };
       const executor = new win.__waiClasses.VisibleSendExecutor(

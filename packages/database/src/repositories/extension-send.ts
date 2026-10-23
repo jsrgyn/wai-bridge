@@ -1,5 +1,5 @@
 import { FlowLogRepository } from './flow-logs.js';
-import { flowCode } from '@wai-bridge/shared';
+import { DEFAULT_SEND_TIMING, flowCode } from '@wai-bridge/shared';
 import { ConversationIdentityRepository } from './conversation-identities.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -323,7 +323,14 @@ export class ExtensionSendRepository {
           this.now(),
         );
         if (!input.allowClaim) return { command: null };
-        if (this.db.prepare("SELECT id FROM wa_dialogue_sync_requests WHERE status='CLAIMED' AND expires_at>? LIMIT 1").get(this.now())) return { command: null };
+        if (
+          this.db
+            .prepare(
+              "SELECT id FROM wa_dialogue_sync_requests WHERE status='CLAIMED' AND expires_at>? LIMIT 1",
+            )
+            .get(this.now())
+        )
+          return { command: null };
 
         const found = this.db
           .prepare(
@@ -375,6 +382,8 @@ export class ExtensionSendRepository {
             mode: payload.mode,
             explicitAuthorization: true,
             leaseUntil: until,
+            timing: DEFAULT_SEND_TIMING,
+            appendToDraft: false,
           }),
         };
       })
@@ -440,6 +449,8 @@ export class ExtensionSendRepository {
             .prepare('UPDATE wa_outbox SET payload_json=? WHERE id=?')
             .run(JSON.stringify({ ...payload, conversationId: resolved.conversationId }), item.id);
         }
+        // DRAFTED is accepted by the contract but handled by the queue repository in a later task.
+        if (input.step === 'DRAFTED') throw new Error('EXTENSION_STEP_UNSUPPORTED');
         const fields = {
           requiredLeaseOwner: owner,
           ...(input.step === 'WAITING_AUTO_SEND'

@@ -84,6 +84,13 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
           mode: 'SUPERVISED',
           explicitAuthorization: true,
           leaseUntil: new Date(Date.now() + 180000).toISOString(),
+          timing: {
+            autoCountdownMs: 5000,
+            executionTimeoutMs: 60000,
+            queueMaxWaitMs: 1800000,
+            sendVerifyMs: 15000,
+          },
+          appendToDraft: false,
         },
       },
       sender,
