@@ -2,7 +2,7 @@ import { ContactDirectoryRepository,DialogueSyncBatchRepository } from '@wai-bri
 import { ConversationReviewRepository } from '@wai-bridge/database';
 import { DialogueSyncRepository } from '@wai-bridge/database';
 import { FlowLogRepository } from '@wai-bridge/database';
-import { ExtensionSendRepository } from '@wai-bridge/database';
+import { ExtensionSendRepository, SendSettingsRepository } from '@wai-bridge/database';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
@@ -17,7 +17,7 @@ import {
 } from '@wai-bridge/database';
 import { EventRepository, EventService } from '@wai-bridge/events';
 import { OutboxCancellationService, OutboxService } from '@wai-bridge/outbox-engine';
-import type { CaptureObservation } from '@wai-bridge/shared';
+import type { CaptureObservation, SendTimingOverride } from '@wai-bridge/shared';
 import { badRequest, conflict, notFound } from '../errors.js';
 import type { PageQuery, MessageQuery } from '../types.js';
 function decodeCursor(cursor: string | undefined): string | undefined {
@@ -432,6 +432,24 @@ export class ApiService {
   }
   cancelExtensionSend(id: string) {
     return this.extensionSendCall(() => new ExtensionSendRepository(this.db).cancel(id));
+  }
+  extensionSendQueue() {
+    return new ExtensionSendRepository(this.db).queue();
+  }
+  extensionSendStatus(id: string) {
+    try {
+      return new ExtensionSendRepository(this.db).status(id);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'COMMAND_NOT_FOUND')
+        throw notFound('Command');
+      throw error;
+    }
+  }
+  sendSettings() {
+    return new SendSettingsRepository(this.db).get();
+  }
+  updateSendSettings(input: SendTimingOverride) {
+    return new SendSettingsRepository(this.db).update(input);
   }
   private extensionSendCall<T>(run: () => T): T {
     try {

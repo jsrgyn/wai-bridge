@@ -30,6 +30,7 @@ import {
   ExtensionPhoneSendRequestSchema,
   ExtensionRecipientSendRequestSchema,
   ExtensionSendRequestSchema,
+  SendTimingOverrideSchema,
   ExtensionSendPollSchema,
   ExtensionSendProgressSchema,
 } from '@wai-bridge/shared';
@@ -498,6 +499,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
       );
       api.post('/extension/outbox/progress', async (request) =>
         service.progressExtensionSend(parse(ExtensionSendProgressSchema, request.body)),
+      );
+      api.get('/extension/outbox/queue', async () => service.extensionSendQueue());
+      api.get('/extension/outbox/:id', async (request) =>
+        service.extensionSendStatus(parse(IdParamsSchema, request.params).id),
+      );
+      api.get('/extension/send-settings', async () => service.sendSettings());
+      api.patch('/extension/send-settings', async (request) =>
+        service.updateSendSettings(parse(SendTimingOverrideSchema, request.body)),
       );
       api.post('/extension/outbox/:id/cancel', async (request) =>
         service.cancelExtensionSend(parse(IdParamsSchema, request.params).id),

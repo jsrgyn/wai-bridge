@@ -52,6 +52,8 @@ const names = [
   'whatsapp_send_to_number',
   'whatsapp_send_to_contact',
   'whatsapp_cancel_extension_send',
+  'whatsapp_get_send_queue',
+  'whatsapp_get_send_status',
 ];
 const closeFns: (() => Promise<void>)[] = [];
 afterEach(async () => {

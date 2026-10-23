@@ -583,4 +583,46 @@ describe('local REST API', () => {
         .statusCode,
     ).toBe(404);
   });
+  it('serves extension send queue, status and send settings with validation', async () => {
+    const { app } = setup();
+    const queue = await app.inject({ method: 'GET', url: '/api/extension/outbox/queue', headers: auth() });
+    expect(queue.statusCode).toBe(200);
+    expect(queue.json()).toMatchObject({ paused: false, items: [] });
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/api/extension/outbox/${randomUUID()}`,
+      headers: auth(),
+    });
+    expect(missing.statusCode).toBe(404);
+    const bad = await app.inject({
+      method: 'PATCH',
+      url: '/api/extension/send-settings',
+      headers: auth(),
+      payload: { autoCountdownMs: 999999 },
+    });
+    expect(bad.statusCode).toBe(400);
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: '/api/extension/send-settings',
+      headers: auth(),
+      payload: { autoCountdownMs: 0 },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().autoCountdownMs).toBe(0);
+    const got = await app.inject({ method: 'GET', url: '/api/extension/send-settings', headers: auth() });
+    expect(got.json().autoCountdownMs).toBe(0);
+    const badCreate = await app.inject({
+      method: 'POST',
+      url: '/api/extension/outbox/phone',
+      headers: { ...auth(), ['idempotency' + '-key']: IDEMPOTENCY_FIXTURE_11 },
+      payload: {
+        phoneNumber: '+550000000021',
+        text: 'Synthetic',
+        mode: 'AUTO',
+        explicitAuthorization: true,
+        timing: { autoCountdownMs: 999999 },
+      },
+    });
+    expect(badCreate.statusCode).toBe(400);
+  });
 });

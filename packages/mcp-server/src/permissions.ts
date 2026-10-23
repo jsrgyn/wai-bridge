@@ -7,7 +7,8 @@ export function parsePermissions(value: string | undefined): Capability[] | unde
     : CapabilitySchema.array().parse(value === '' ? [] : value.split(',').map((s) => s.trim()));
 }
 export function toolCapability(name: string): Capability {
-  if (name === 'whatsapp_get_outbox_status') return 'OPERATIONS_READ';
+  if (['whatsapp_get_outbox_status', 'whatsapp_get_send_queue', 'whatsapp_get_send_status'].includes(name))
+    return 'OPERATIONS_READ';
   if (name === 'whatsapp_update_conversation_policy') return 'CONVERSATIONS_WRITE';
   if (/(?:send|outbox|prepare_message)/.test(name)) return 'SEND';
   if (/(?:create_contact|update_contact)/.test(name)) return 'CONTACTS_WRITE';

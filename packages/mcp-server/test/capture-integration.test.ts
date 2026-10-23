@@ -612,3 +612,15 @@ it('promotes a direction-unknown shell to one available message after later DOM 
  const conversationId=(db.prepare('SELECT id FROM wa_conversations').get() as {id:string}).id;
  const dialogue=await tool('whatsapp_get_dialogue',{conversationId,limit:20});expect(dialogue.messages).toHaveLength(1);expect(dialogue.messages[0]).toMatchObject({direction:'OUTBOUND',content:hydrated.content,sequence:1});
 });
+
+it('forwards timing on send tools and serves the queue without the send opt-in',async()=>{
+  const {app,tool}=await setup(true);
+  const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,confirmedAt:new Date().toISOString()};
+  expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,allowClaim:true}})).statusCode).toBe(200);
+  const created=await tool('whatsapp_send_to_number',{phoneNumber:'+550000000021',text:'Synthetic timing message',mode:'AUTO',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-timing-0001',timing:{autoCountdownMs:0}});
+  expect(JSON.parse((await tool('whatsapp_get_outbox_status',{id:created.id})).command.payload_json).timing).toMatchObject({autoCountdownMs:0});
+  const readOnly=await setup(false);
+  const queue=await readOnly.tool('whatsapp_get_send_queue');
+  expect(queue).toMatchObject({paused:false,items:[]});
+  await expect(readOnly.tool('whatsapp_get_send_status',{id:randomUUID()})).rejects.toBeDefined();
+});

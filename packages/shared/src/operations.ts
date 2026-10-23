@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SendTimingOverrideSchema } from './extension-send.js';
 const text = z.string().trim().min(1).max(256);
 export const ContactEditFieldsSchema = z
   .object({
@@ -187,6 +188,13 @@ export const ManagementRequestSchema = z.discriminatedUnion('operation', [
         .strict(),
     })
     .strict(),
+  z.object({ operation: z.literal('SEND_QUEUE') }).strict(),
+  z.object({ operation: z.literal('SEND_STATUS'), id: z.uuid() }).strict(),
+  z.object({ operation: z.literal('SEND_SETTINGS_GET') }).strict(),
+  z
+    .object({ operation: z.literal('SEND_SETTINGS_UPDATE'), input: SendTimingOverrideSchema })
+    .strict(),
+  z.object({ operation: z.literal('SEND_CANCEL'), id: z.uuid() }).strict(),
   z.object({ operation: z.literal('MAINTENANCE_GET') }).strict(),
   z.object({ operation: z.literal('MAINTENANCE_UPDATE'), input: MaintenanceUpdateSchema }).strict(),
   z.object({ operation: z.literal('BACKUP_RUN'), explicitConfirmation: z.literal(true) }).strict(),
@@ -242,6 +250,16 @@ export function managementRoute(raw: unknown): {
         method: 'POST',
         body: request.input,
       };
+    case 'SEND_QUEUE':
+      return { path: '/api/extension/outbox/queue', method: 'GET' };
+    case 'SEND_STATUS':
+      return { path: `/api/extension/outbox/${request.id}`, method: 'GET' };
+    case 'SEND_SETTINGS_GET':
+      return { path: '/api/extension/send-settings', method: 'GET' };
+    case 'SEND_SETTINGS_UPDATE':
+      return { path: '/api/extension/send-settings', method: 'PATCH', body: request.input };
+    case 'SEND_CANCEL':
+      return { path: `/api/extension/outbox/${request.id}/cancel`, method: 'POST', body: {} };
     case 'MAINTENANCE_GET':
       return { path: '/api/maintenance', method: 'GET' };
     case 'MAINTENANCE_UPDATE':

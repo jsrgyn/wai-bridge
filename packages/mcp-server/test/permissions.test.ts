@@ -7,4 +7,6 @@ it('distinguishes omitted legacy settings from empty deny-all and rejects unknow
   expect(() => parsePermissions('ADMIN')).toThrow();
   expect(toolCapability('whatsapp_update_conversation_policy')).toBe('CONVERSATIONS_WRITE');
   expect(toolCapability('whatsapp_get_outbox_status')).toBe('OPERATIONS_READ');
+  expect(toolCapability('whatsapp_get_send_queue')).toBe('OPERATIONS_READ');
+  expect(toolCapability('whatsapp_get_send_status')).toBe('OPERATIONS_READ');
 });
