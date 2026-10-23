@@ -588,6 +588,53 @@ describe('local REST API', () => {
     const queue = await app.inject({ method: 'GET', url: '/api/extension/outbox/queue', headers: auth() });
     expect(queue.statusCode).toBe(200);
     expect(queue.json()).toMatchObject({ paused: false, items: [] });
+    const identity = {
+      version: 1,
+      type: 'UI_CONTEXT',
+      source: 'VISIBLE_UI',
+      accountId: randomUUID(),
+      contextId: randomUUID(),
+      conversationKey: randomUUID(),
+      conversationKind: 'INDIVIDUAL',
+      confirmedAt: new Date().toISOString(),
+    };
+    const poll = await app.inject({
+      method: 'POST',
+      url: '/api/extension/outbox/poll',
+      headers: auth(),
+      payload: { extensionInstanceId: randomUUID(), identity, allowClaim: true },
+    });
+    expect(poll.statusCode).toBe(200);
+    const create = async (n: number, timing?: object) =>
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/extension/outbox/phone',
+          headers: { ...auth(), ['idempotency' + '-key']: `synthetic-queue-key-${n}` },
+          payload: {
+            phoneNumber: `+55000000003${n}`,
+            text: `Synthetic queue ${n}`,
+            mode: 'AUTO',
+            explicitAuthorization: true,
+            ...(timing ? { timing } : {}),
+          },
+        })
+      ).json().id as string;
+    const first = await create(1);
+    const priority = await create(2, { autoCountdownMs: 0 });
+    const third = await create(3);
+    const ordered = (
+      await app.inject({ method: 'GET', url: '/api/extension/outbox/queue', headers: auth() })
+    ).json();
+    expect(ordered.items.map((x: { id: string }) => x.id)).toEqual([priority, first, third]);
+    expect(ordered.items.map((x: { priority: number }) => x.priority)).toEqual([1, 0, 0]);
+    expect(ordered.items.map((x: { position: number }) => x.position)).toEqual([1, 2, 3]);
+    const one = await app.inject({
+      method: 'GET',
+      url: `/api/extension/outbox/${priority}`,
+      headers: auth(),
+    });
+    expect(one.json()).toMatchObject({ id: priority, priority: 1 });
     const missing = await app.inject({
       method: 'GET',
       url: `/api/extension/outbox/${randomUUID()}`,

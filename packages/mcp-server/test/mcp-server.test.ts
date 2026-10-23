@@ -297,3 +297,26 @@ it('enforces capability profiles before API access while retaining independent s
   ).toBe(true);
   expect(fetchImpl).not.toHaveBeenCalled();
 });
+
+it('forwards timing from whatsapp_send_message to the Local API', async () => {
+  const bodies: unknown[] = [];
+  const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return Response.json({ id: 'command', status: 'REQUESTED' }, { status: 202 });
+  }) as typeof fetch;
+  const api = new LocalApiClient({ baseUrl: 'http://127.0.0.1:47831', token: TOKEN, fetchImpl });
+  const client = await connect(createMcpServer({ api, allowExtensionSends: true }));
+  const response = await client.callTool({
+    name: 'whatsapp_send_message',
+    arguments: {
+      conversationId: '11111111-1111-4111-8111-111111111111',
+      text: 'Synthetic reply',
+      mode: 'AUTO',
+      explicitAuthorization: true,
+      idempotencyKey: 'synthetic-extension-key',
+      timing: { autoCountdownMs: 0 },
+    },
+  });
+  expect(response.isError).not.toBe(true);
+  expect(bodies[0]).toMatchObject({ timing: { autoCountdownMs: 0 } });
+});
