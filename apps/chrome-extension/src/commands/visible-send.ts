@@ -296,7 +296,7 @@ export class VisibleSendExecutor {
    * Prepare the target composer (only after the target chat is open and validated).
    * - appendToDraft with non-empty composer: keep everything already there (including the
    *   user's edits), move the caret to the end and insert a line break plus the text.
-   *   If the composer already ends with the text (requeue), insert nothing.
+   *   If the composer equals the text or its last line is the text (requeue), insert nothing.
    * - Otherwise: select everything, delete it and insert the text once.
    * The line break uses `insertLineBreak`; no Enter key is ever dispatched, so it cannot send.
    */
@@ -324,7 +324,7 @@ export class VisibleSendExecutor {
     composer.focus();
     const prior = messageText(composer);
     const append = appendToDraft && prior !== '';
-    if (append && prior.endsWith(text)) {
+    if (append && (prior === text || prior.endsWith(`\n${text}`))) {
       stable();
       return composer;
     }
@@ -348,9 +348,8 @@ export class VisibleSendExecutor {
     this.doc.execCommand('insertText', false, command.text);
     await waitFor(() => {
       const current = messageText(composer);
-      return append
-        ? current.startsWith(prior) && current.endsWith(text) && current.length > prior.length
-        : current === text;
+      // Append must render as prior + one line break + text; a missing break fails closed.
+      return current === (append ? `${prior}\n${text}` : text);
     });
     return composer;
   }

@@ -50,7 +50,7 @@ async function setup(
   await page.route('https://wai.test/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
-      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>${options.otherChatDraft === undefined ? '' : `<section id="other-chat"><footer><div id="other-composer" contenteditable="true" style="min-height:24px">${options.otherChatDraft}</div></footer></section>`}`,
+      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>${options.otherChatDraft === undefined ? '' : `<section id="other-chat"><footer><div id="other-composer" role="textbox" contenteditable="true" style="min-height:24px">${options.otherChatDraft}</div></footer></section>`}`,
     }),
   );
   await page.goto('https://wai.test/');
@@ -275,7 +275,7 @@ for (const behavior of [
 }
 
 async function composerText(page: Page) {
-  return page.getByRole('textbox').evaluate((e) => (e as HTMLElement).innerText.trim());
+  return page.locator('#main [role="textbox"]').evaluate((e) => (e as HTMLElement).innerText.trim());
 }
 test('second supervised request to same target appends on new line', async ({ page }) => {
   await setup(page, 'SUPERVISED', { text: 'Synthetic first note' });
@@ -346,4 +346,32 @@ test('AUTO with appendToDraft fails without touching the pending draft', async (
   });
   expect(state.steps).not.toContain('SENDING');
   expect(await composerText(page)).toBe('Synthetic first note');
+});
+test('append fails closed when the line break is not rendered', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await page.evaluate(() => {
+    const original = document.execCommand.bind(document);
+    document.execCommand = (name, ui, value) =>
+      name === 'insertLineBreak' ? true : original(name, ui, value);
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({ clicks: 0, steps: ['FAILED'], codes: ['COMPOSE_FAILED'] });
+});
+test('append still happens when the draft only ends with the same words mid-line', async ({
+  page,
+}) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic see you tomorrow',
+    text: 'tomorrow',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic see you tomorrow\ntomorrow');
 });
