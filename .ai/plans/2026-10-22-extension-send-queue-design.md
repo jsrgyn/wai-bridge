@@ -14,7 +14,7 @@ Hoje (verificado no código):
 - SUPERVISED preenche o campo e aguarda o clique do usuário por até a duração do lease (180 s), prendendo a fila (`apps/chrome-extension/src/commands/visible-send.ts`, `waitForManualSend`).
 - Pedidos em `REQUESTED` expiram após 300 s como `FAILED/REQUEST_EXPIRED` (`packages/database/src/repositories/extension-send.ts`).
 - A busca só é limpa no `finally` do job, sob condições; a gaveta "Nova conversa" nunca é fechada (`phone-search.ts`, `release()`).
-- Busca preenchida, gaveta aberta ou rascunho existente fazem o pedido falhar (`SEARCH_HAS_INPUT`, `COMPOSER_HAS_DRAFT`).
+- Busca preenchida, gaveta aberta ou rascunho existente fazem o pedido falhar (`SEARCH_HAS_INPUT`, `COMPOSER_HAS_DRAFT`). *(Estado anterior; no novo fluxo esses casos são normalizados, e o único bloqueio por rascunho é `DRAFT_PENDING_ON_TARGET` em AUTO com campo não vazio — ADR 0024, R7'.)*
 - Lease expirado vira `FAILED` (ou `UNKNOWN` se já em `SENDING`), sem recolocar na fila.
 - Disponibilidade depende de `setInterval` no service worker e da porta nativa; não há `chrome.alarms`.
 

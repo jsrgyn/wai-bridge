@@ -3,17 +3,17 @@
 1. Recarregue WAI Bridge em chrome://extensions e depois recarregue WhatsApp Web.
    Monitor ON, agente conectado, permissão de comandos de envio marcada.
    Reconecte MCP no cliente para descobrir whatsapp_send_to_contact.
-2. Abra uma conversa, deixe compositor e pesquisa vazios. Não edite o perfil.
+2. Abra uma conversa. A extensão limpa a pesquisa ao começar. Não edite o perfil.
    O painel normal pode permanecer aberto, inclusive com switch de notificações.
 3. Peça à IA: “Use o wai-bridge para preparar para esposa, modo SUPERVISED,
    texto TESTE-ENVIO-02”. Isso só funciona se o nome corresponder ao SQLite e
    houver um telefone único cadastrado na conta ativa. A ferramenta é
    whatsapp_send_to_contact. Sem telefone/nome, informe o número internacional
    completo e use whatsapp_send_to_number. Não adivinhar parentesco ou dígitos.
-4. O retorno inicial é REQUESTED com ID. Volte ao Chrome/WhatsApp: a extensão
+4. O retorno inicial é QUEUED com ID. Volte ao Chrome/WhatsApp: a extensão
    deve localizar a conversa, abrir perfil, conferir telefone e preparar texto.
-   Aguarde WAITING_USER, sem mensagem enviada. Consulte o status pelo ID no MCP.
-   Alternar temporariamente de aplicativo mantém a espera dentro da lease.
+   O status vai a DRAFTED, sem mensagem enviada. Consulte o status pelo ID no MCP.
+   Sem aba utilizável o pedido fica em WAITING_WHATSAPP.
 5. Confira destinatário/texto. Só clique Enviar se quiser fazer esse teste real.
    Depois consulte status: SENT requer evidência visível; UNKNOWN não deve ser
    reenviado automaticamente. A captura normal registra a saída observável.
@@ -31,9 +31,10 @@
    (não bloqueia fechamento), aba oculta (não reivindica), idempotência após
    rename/expiração (mesmo comando) e prova de perfil divergente (sem cadastro).
 
-AUTO continua exigindo pedido explícito, opt-in e cinco segundos canceláveis;
-SUPERVISED nunca deve enviar sem o clique manual. Pedidos REQUESTED expiram em
-cinco minutos e a lease de execução dura três. Cobertura de captura global de
+AUTO continua exigindo pedido explícito, opt-in e contagem cancelável
+configurável (padrão 5 s, 0–30 s); SUPERVISED nunca clica Enviar e termina em
+DRAFTED. Pedidos na fila expiram pelo tempo máximo configurado (padrão 30 min,
+ou sem limite) e a lease de execução segue o tempo configurado (padrão 60 s). Cobertura de captura global de
 conversas fechadas permanece parcial (FR-13).
 
 ## Regressão: grupos em comum na busca
@@ -54,8 +55,8 @@ Fechar a conversa deve informar NO_MONITORED_CONTEXT; desconectar/aba sem respos
 não pode continuar aparecendo como ponte pronta apenas porque SQLite está conectado.
 
 Em teste real explicitamente autorizado, solicitar SUPERVISED deve retornar intenção
-sem aguardar o clique manual. Havendo outra aba selecionada, uma única aba compatível
-do WhatsApp pode vir à frente. Aguardar WAITING_USER, cancelar pelo MCP e verificar
-CANCELLED sem clicar Enviar; uma solicitação posterior não deve ficar presa à espera
-antiga. Nunca repetir UNKNOWN. Testes automatizados usam somente fixtures, inclusive
+sem aguardar clique. Havendo outra aba selecionada, uma única aba compatível
+do WhatsApp pode vir à frente. Para cancelar, use o MCP enquanto o pedido está em
+QUEUED/WAITING_WHATSAPP (ou AUTO em WAITING_AUTO_SEND) e verifique CANCELLED sem
+clicar Enviar; DRAFTED é terminal e não prende pedidos posteriores. Nunca repetir UNKNOWN. Testes automatizados usam somente fixtures, inclusive
 ativação de abas/janelas simuladas e observação persistida bloqueada artificialmente.
