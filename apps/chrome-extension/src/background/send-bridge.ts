@@ -22,7 +22,7 @@ const ContextSchema = z.object({
 type Context = z.infer<typeof ContextSchema>;
 type Port = { postMessage(value: unknown): void };
 type Active = { tabId: number; command: ExtensionSendCommand; identity: ConversationIdentity };
-const terminal = new Set(['SENT', 'FAILED', 'CANCELLED', 'UNKNOWN']);
+const terminal = new Set(['SENT', 'FAILED', 'CANCELLED', 'UNKNOWN', 'DRAFTED']);
 function bounded<T>(operation: Promise<T>, ms = 1500): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('CONTENT_UNREACHABLE')), ms);

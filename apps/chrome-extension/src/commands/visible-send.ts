@@ -109,8 +109,9 @@ export class VisibleSendExecutor {
         outcome: 'SUCCEEDED',
         code: 'OK',
       });
-      const composer = this.composer(root);
-      if (messageText(composer)) throw new Error('COMPOSER_HAS_DRAFT');
+      // Leave the search empty and drawers closed while the verified chat stays open.
+      await search?.resetAfterVerify();
+      this.check(command, controller.signal);
       const baseline = new Set(
         root.querySelectorAll<HTMLElement>('[data-testid="msg-container"], .message-out'),
       );
@@ -119,19 +120,12 @@ export class VisibleSendExecutor {
           .map((e) => new WhatsAppDomAdapter().renderKey(e))
           .filter(Boolean),
       );
-      composer.focus();
-      // Chromium/editor handlers may insert successfully while returning false.
-      // Observe the rendered editor instead of treating that boolean as evidence.
-      // Insert exactly once: never retry or replace a user's partial draft.
-      this.doc.execCommand('insertText', false, command.text);
-      const composeDeadline = Date.now() + 1000;
-      while (messageText(composer) !== command.text.normalize('NFC')) {
-        this.check(command, controller.signal);
-        if (!composer.isConnected || this.composer(this.validate(command)) !== composer)
-          throw new Error('COMPOSE_FAILED');
-        if (Date.now() >= composeDeadline) throw new Error('COMPOSE_FAILED');
-        await delay(50, controller.signal);
-      }
+      const composer = await this.prepareComposer(
+        command,
+        root,
+        command.appendToDraft,
+        controller.signal,
+      );
       this.validate(command);
       this.doc.body.append(box);
       emitFlow(this.logs, {
@@ -142,27 +136,25 @@ export class VisibleSendExecutor {
         outcome: 'SUCCEEDED',
         code: 'OK',
       });
-      if (command.mode === 'AUTO') {
-        await this.progress(command, {
-          step: 'WAITING_AUTO_SEND',
-          code: 'AUTO_COUNTDOWN_STARTED',
+      if (command.mode === 'SUPERVISED') {
+        // Supervised never sends: the verified draft is handed to the user and the queue moves on.
+        await this.reportTerminal(command, {
+          step: 'DRAFTED',
+          code: 'DRAFT_READY',
           ...this.recipientProof(command),
         });
-        const due = Date.now() + 5000;
-        while (Date.now() < due) {
-          this.check(command, controller.signal);
-          label.textContent = `WAI Bridge: envio em ${Math.ceil((due - Date.now()) / 1000)} s. ${command.text}`;
-          await delay(100, controller.signal);
-        }
-      } else {
-        await this.progress(command, {
-          step: 'WAITING_USER',
-          code: 'MANUAL_SEND_REQUIRED',
-          ...this.recipientProof(command),
-        });
-        label.textContent =
-          'WAI Bridge: confira a mensagem e clique em Enviar. O envio aguardará a confirmação do registro local.';
-        await this.waitForManualSend(root, command, controller.signal);
+        return;
+      }
+      await this.progress(command, {
+        step: 'WAITING_AUTO_SEND',
+        code: 'AUTO_COUNTDOWN_STARTED',
+        ...this.recipientProof(command),
+      });
+      const due = Date.now() + command.timing.autoCountdownMs;
+      while (Date.now() < due) {
+        this.check(command, controller.signal);
+        label.textContent = `WAI Bridge: envio em ${Math.ceil((due - Date.now()) / 1000)} s. ${command.text}`;
+        await delay(100, controller.signal);
       }
       this.check(command, controller.signal);
       if (messageText(composer) !== command.text.normalize('NFC'))
@@ -296,57 +288,52 @@ export class VisibleSendExecutor {
     if (fields.length !== 1) throw new Error('COMPOSER_UNAVAILABLE');
     return fields[0]!;
   }
-  private waitForManualSend(
-    root: HTMLElement,
+  /**
+   * Replace-only for now: select everything in the target composer, delete it and
+   * insert the command text once. Erasing first means a requeued job never duplicates
+   * its own earlier text. `appendToDraft` is reserved for the append branch.
+   */
+  private async prepareComposer(
     command: ExtensionSendCommand,
+    root: HTMLElement,
+    appendToDraft: boolean,
     signal: AbortSignal,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const finish = (error?: Error) => {
-        clearInterval(timer);
-        this.doc.removeEventListener('click', click, true);
-        this.doc.removeEventListener('keydown', key, true);
-        if (error) reject(error);
-        else resolve();
-      };
-      const click = (event: MouseEvent) => {
-        const el = event.target instanceof Element ? event.target : null;
-        const send = el?.closest('[aria-label="Enviar"], [aria-label="Send"]');
-        if (send && root.contains(send) && send.closest('footer')) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          finish();
-        }
-      };
-      const key = (event: KeyboardEvent) => {
-        if (
-          event.key === 'Enter' &&
-          !event.shiftKey &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.altKey &&
-          event.target instanceof Element &&
-          event.target.closest('[contenteditable="true"]') &&
-          root.contains(event.target)
-        ) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          finish();
-        }
-      };
-      const timer = setInterval(() => {
-        try {
-          if (signal.aborted) throw new Error('USER_CANCELLED');
-          // Keep the prepared draft while the user checks MCP status in another app.
-          // Hidden waiting never authorizes a click; final execution still requires visibility.
-          this.validate(command, true);
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error('SEND_CONTEXT_UNAVAILABLE'));
-        }
-      }, 100);
-      this.doc.addEventListener('click', click, true);
-      this.doc.addEventListener('keydown', key, true);
-    });
+  ): Promise<HTMLElement> {
+    void appendToDraft;
+    const composer = this.composer(root);
+    const expected = command.text.normalize('NFC');
+    const stable = () => {
+      this.check(command, signal);
+      if (!composer.isConnected || this.composer(this.validate(command)) !== composer)
+        throw new Error('COMPOSE_FAILED');
+    };
+    composer.focus();
+    if (messageText(composer)) {
+      const selection = this.doc.getSelection();
+      const range = this.doc.createRange();
+      range.selectNodeContents(composer);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      this.doc.execCommand('delete', false);
+      const clearDeadline = Date.now() + 1000;
+      while (messageText(composer)) {
+        stable();
+        if (Date.now() >= clearDeadline) throw new Error('COMPOSE_FAILED');
+        await delay(50, signal);
+      }
+    }
+    stable();
+    // Chromium/editor handlers may insert successfully while returning false.
+    // Observe the rendered editor instead of treating that boolean as evidence.
+    // Insert exactly once: never retry, so text is never duplicated.
+    this.doc.execCommand('insertText', false, command.text);
+    const composeDeadline = Date.now() + 1000;
+    while (messageText(composer) !== expected) {
+      stable();
+      if (Date.now() >= composeDeadline) throw new Error('COMPOSE_FAILED');
+      await delay(50, signal);
+    }
+    return composer;
   }
   private async verify(
     root: HTMLElement,
@@ -355,7 +342,7 @@ export class VisibleSendExecutor {
     keys: Set<string | undefined>,
     signal: AbortSignal,
   ): Promise<Step> {
-    const until = Date.now() + 15_000;
+    const until = Date.now() + command.timing.sendVerifyMs;
     const adapter = new WhatsAppDomAdapter();
     while (Date.now() < until) {
       this.check(command, signal);

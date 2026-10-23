@@ -54,9 +54,6 @@ for (const scenario of [
   'drawer-opens-late',
   'search-busy',
   'supervised',
-  'supervised-context-change',
-  'supervised-profile-closed',
-  'supervised-hidden',
   'not-found',
   'profile-open',
   'profile-controls',
@@ -73,7 +70,6 @@ for (const scenario of [
   test(`phone search ${scenario} verifies recipient before any synthetic send`, async ({
     page,
   }) => {
-    if (scenario === 'supervised-profile-closed') await page.clock.install();
     await page.route('https://phone.test/**', (route) =>
       route.fulfill({
         contentType: 'text/html',
@@ -251,19 +247,12 @@ for (const scenario of [
         identity,
         async (_command, step) => {
           if (
-            ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
+            ['DRAFTED', 'WAITING_AUTO_SEND'].includes(step.step) &&
             (step.resolvedIdentity?.type !== 'UI_CONTEXT' ||
               step.resolvedIdentity.phone !== '+12025550123' ||
               step.conversationLabel !== 'Synthetic result')
           )
             throw new Error('SYNTHETIC_MISSING_PROFILE_PROOF');
-          if (scenario === 'supervised-hidden' && step.step === 'WAITING_USER') {
-            let hidden = true;
-            Object.defineProperty(document, 'hidden', { get: () => hidden });
-            setTimeout(() => {
-              hidden = false;
-            }, 400);
-          }
           state.steps.push(step.step);
           if (scenario === 'drawer-opens-late' && step.step === 'SENT') {
             // The job ends with a drawer open whose Back control closes it slowly.
@@ -278,7 +267,7 @@ for (const scenario of [
           }
           state.codes.push(step.code);
           if (
-            ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
+            ['DRAFTED', 'WAITING_AUTO_SEND'].includes(step.step) &&
             document.querySelector('[data-testid="chat-info-drawer"]')
           )
             throw new Error('SYNTHETIC_PROFILE_NOT_CLOSED');
@@ -346,32 +335,6 @@ for (const scenario of [
       await page
         .getByRole('textbox', { name: 'Pesquisar ou começar uma nova conversa' })
         .fill('Synthetic user input');
-    if (scenario.startsWith('supervised')) {
-      await expect
-        .poll(() => page.evaluate(() => window.phoneCase.steps))
-        .toEqual(['WAITING_USER']);
-      if (scenario === 'supervised-hidden')
-        await expect.poll(() => page.evaluate(() => document.hidden)).toBe(false);
-      expect(await page.evaluate(() => window.phoneCase.clicks)).toBe(0);
-      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
-      if (scenario === 'supervised-context-change') {
-        await page.evaluate(() => {
-          document.querySelector(
-            '[data-testid="conversation-info-header-chat-title"]',
-          )!.textContent = 'Different synthetic contact';
-        });
-      } else {
-        if (scenario === 'supervised-profile-closed') {
-          // Several validation ticks must accept absence of the confirmed panel.
-          await expect
-            .poll(() => page.evaluate(() => window.phoneCase.steps.at(-1)))
-            .toBe('WAITING_USER');
-          await page.clock.fastForward(21_000);
-          expect(await page.evaluate(() => window.phoneCase.steps)).toEqual(['WAITING_USER']);
-        }
-        await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-      }
-    }
     await page.evaluate(() => window.phoneCase.done);
     const state = await page.evaluate(() => ({
       steps: window.phoneCase.steps,
@@ -402,16 +365,14 @@ for (const scenario of [
         'new-chat-open',
         'drawer-opens-late',
         'search-busy',
+        'draft',
         'supervised',
-        'supervised-profile-closed',
-        'supervised-hidden',
       ].includes(scenario)
     ) {
-      expect(state.steps).toEqual([
-        scenario.startsWith('supervised') ? 'WAITING_USER' : 'WAITING_AUTO_SEND',
-        'SENDING',
-        'SENT',
-      ]);
+      // SUPERVISED ends with the verified draft and never clicks Send.
+      expect(state.steps).toEqual(
+        scenario === 'supervised' ? ['DRAFTED'] : ['WAITING_AUTO_SEND', 'SENDING', 'SENT'],
+      );
       expect(state.phases.indexOf('CHAT_OPEN_STARTED')).toBeGreaterThanOrEqual(0);
       expect(state.phases.indexOf('CHAT_OPENED')).toBeGreaterThan(
         state.phases.indexOf('CHAT_OPEN_STARTED'),
@@ -420,7 +381,9 @@ for (const scenario of [
         state.phases.indexOf('CHAT_OPENED'),
       );
       expect(state.hiddenWrites).toBe(false);
-      expect(state.clicks).toBe(1);
+      expect(state.clicks).toBe(scenario === 'supervised' ? 0 : 1);
+      if (scenario === 'supervised')
+        await expect(page.locator('#main footer [contenteditable]')).not.toBeEmpty();
       expect(state.profileClicks).toBe(1);
       // The executor finishes only after cleanup closed any late drawer, exactly once.
       if (scenario === 'drawer-opens-late') expect(state.backClicks).toBe(1);
@@ -462,10 +425,8 @@ for (const scenario of [
           'profile-close-unavailable': 'PROFILE_CLOSE_UNAVAILABLE',
           'wrong-phone': 'RECIPIENT_PHONE_MISMATCH',
           ambiguous: 'AMBIGUOUS_PHONE_RESULTS',
-          draft: 'COMPOSER_HAS_DRAFT',
           'wrong-account': 'RECIPIENT_ACCOUNT_MISMATCH',
           'profile-change': 'RECIPIENT_PHONE_MISMATCH',
-          'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
           group: 'RECIPIENT_IS_GROUP',
           'user-interference': 'USER_INTERFERENCE',
         }[
@@ -488,9 +449,8 @@ for (const scenario of [
             | 'new-chat-open'
             | 'drawer-opens-late'
             | 'search-busy'
+            | 'draft'
             | 'supervised'
-            | 'supervised-profile-closed'
-            | 'supervised-hidden'
           >
         ],
       );

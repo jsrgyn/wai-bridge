@@ -34,12 +34,19 @@ stop();
 async function setup(
   page: Page,
   mode: 'AUTO' | 'SUPERVISED' = 'AUTO',
-  options: { enabled?: boolean; failSending?: boolean; pending?: boolean; draft?: boolean } = {},
+  options: {
+    enabled?: boolean;
+    failSending?: boolean;
+    pending?: boolean;
+    draft?: string;
+    autoCountdownMs?: number;
+    sendVerifyMs?: number;
+  } = {},
 ) {
   await page.route('https://wai.test/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
-      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ? 'Existing synthetic draft' : ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>`,
+      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>`,
     }),
   );
   await page.goto('https://wai.test/');
@@ -67,10 +74,10 @@ async function setup(
         explicitAuthorization: true,
         leaseUntil: new Date(Date.now() + 180_000).toISOString(),
         timing: {
-          autoCountdownMs: 5000,
+          autoCountdownMs: options.autoCountdownMs ?? 5000,
           executionTimeoutMs: 60000,
           queueMaxWaitMs: 1800000,
-          sendVerifyMs: 15000,
+          sendVerifyMs: options.sendVerifyMs ?? 15000,
         },
         appendToDraft: false,
       };
@@ -139,27 +146,50 @@ test('AUTO sends once after five seconds and durable acknowledgement, with visib
   ).rejects.toThrow('COMMAND_ALREADY_ATTEMPTED');
   expect((await page.evaluate(() => window.__state)).clicks).toBe(1);
 });
-test('SUPERVISED waits for manual click and records SENDING before the synthetic send', async ({
+test('supervised leaves text in composer, target chat open, reports DRAFTED without user click', async ({
   page,
 }) => {
   await setup(page, 'SUPERVISED');
   await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  expect((await page.evaluate(() => window.__state)).clicks).toBe(0);
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-  expect(await result(page)).toMatchObject({
-    clicks: 1,
-    steps: ['WAITING_USER', 'SENDING', 'SENT'],
-  });
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  await expect(page.getByRole('textbox')).toHaveText('Synthetic good night ❤️');
+  await expect(page.locator('[data-testid="conversation-info-header-chat-title"]')).toHaveText(
+    'Synthetic person',
+  );
+  await expect(page.getByRole('status')).toHaveCount(0);
+});
+test('supervised replaces an existing draft, including its own earlier text, without duplicating', async ({
+  page,
+}) => {
+  for (const draft of ['Existing synthetic draft', 'Synthetic good night ❤️']) {
+    await setup(page, 'SUPERVISED', { draft });
+    await start(page);
+    expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+    await expect(page.getByRole('textbox')).toHaveText('Synthetic good night ❤️');
+  }
+});
+test('auto with countdown 0 sends immediately and reports SENT', async ({ page }) => {
+  await setup(page, 'AUTO', { autoCountdownMs: 0 });
+  const startAt = Date.now();
+  await start(page);
+  const state = await result(page);
+  expect(Date.now() - startAt).toBeLessThan(4000);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'SENT'] });
+});
+test('auto uses configured verify timeout', async ({ page }) => {
+  await setup(page, 'AUTO', { autoCountdownMs: 0, sendVerifyMs: 5000, pending: true });
+  const startAt = Date.now();
+  await start(page);
+  const state = await result(page);
+  expect(Date.now() - startAt).toBeLessThan(9000);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'UNKNOWN'] });
 });
 test('fails closed if durable SENDING reply is lost', async ({ page }) => {
-  await setup(page, 'SUPERVISED', { failSending: true });
+  await setup(page, 'AUTO', { autoCountdownMs: 0, failSending: true });
   await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
   expect(await result(page)).toMatchObject({
     clicks: 0,
-    steps: ['WAITING_USER', 'SENDING', 'UNKNOWN'],
+    steps: ['WAITING_AUTO_SEND', 'SENDING', 'UNKNOWN'],
   });
 });
 test('cancels during countdown without clicking send', async ({ page }) => {
@@ -171,11 +201,8 @@ test('cancels during countdown without clicking send', async ({ page }) => {
     steps: ['WAITING_AUTO_SEND', 'CANCELLED'],
   });
 });
-test('rejects disabled gate and existing drafts without editing or sending', async ({ page }) => {
-  await setup(page, 'AUTO', { enabled: false });
-  await start(page);
-  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['FAILED'] });
-  await setup(page, 'AUTO', { draft: true });
+test('rejects disabled gate without editing or sending', async ({ page }) => {
+  await setup(page, 'AUTO', { enabled: false, draft: 'Existing synthetic draft' });
   await start(page);
   expect(await result(page)).toMatchObject({ clicks: 0, steps: ['FAILED'] });
   await expect(page.getByRole('textbox')).toHaveText('Existing synthetic draft');
@@ -194,17 +221,6 @@ test('rejects changed context during countdown and revoked opt-in', async ({ pag
   await page.evaluate(() => window.__executor.setEnabled(false));
   expect((await result(page)).clicks).toBe(0);
 });
-test('pending bubble is UNKNOWN and never clicked twice', async ({ page }) => {
-  await setup(page, 'SUPERVISED', { pending: true });
-  await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-  expect(await result(page)).toMatchObject({
-    clicks: 1,
-    steps: ['WAITING_USER', 'SENDING', 'UNKNOWN'],
-  });
-});
-
 for (const behavior of [
   'false-after-insert',
   'delayed-insert',
@@ -239,13 +255,7 @@ for (const behavior of [
       expect(state.steps).not.toContain('SENDING');
       return;
     }
-    await expect
-      .poll(() => page.evaluate(() => window.__state.steps.includes('WAITING_USER')))
-      .toBe(true);
-    expect(await page.evaluate(() => window.__state.clicks)).toBe(0);
-    await page.evaluate(() => window.__executor.cancel());
     const state = await result(page);
-    expect(state.steps).toContain('CANCELLED');
-    expect(state.clicks).toBe(0);
+    expect(state).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
   });
 }

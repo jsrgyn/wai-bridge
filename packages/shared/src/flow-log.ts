@@ -21,6 +21,7 @@ export const FlowPhaseSchema = z.enum([
   'RECIPIENT_VERIFIED',
   'MESSAGE_COMPOSED',
   'WAITING_USER',
+  'DRAFTED',
   'WAITING_AUTO_SEND',
   'SENDING',
   'SENT',

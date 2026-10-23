@@ -89,7 +89,7 @@ function setup() {
       let result: unknown;
       if (req.type === 'SEND_PROGRESS') {
         state.phase = String(req.input.step);
-        if (['CANCELLED', 'FAILED', 'SENT', 'UNKNOWN'].includes(state.phase)) state.queued = false;
+        if (['CANCELLED', 'FAILED', 'SENT', 'UNKNOWN', 'DRAFTED'].includes(state.phase)) state.queued = false;
         result = { ok: true, status: state.phase };
       } else if (req.input.activeCommand) result = { command: null, activeStatus: state.phase };
       else if (!req.input.identity || !req.input.allowClaim || !state.queued)
@@ -106,7 +106,30 @@ function setup() {
   });
   return { bridge, state, identity, command, extensionInstanceId };
 }
-it('acknowledges acceptance immediately and keeps polling authoritative cancellation during manual wait', async () => {
+it('bridge releases active job on DRAFTED and polls next', async () => {
+  const { bridge, state, command, extensionInstanceId } = setup();
+  await bridge.poll();
+  expect(state.executions).toBe(1);
+  const result = await bridge.progress(
+    {
+      extensionInstanceId,
+      commandId: command.id,
+      contextId: command.contextId,
+      leaseToken: command.leaseToken,
+      step: 'DRAFTED',
+      code: 'DRAFT_READY',
+    },
+    5,
+  );
+  expect(result.status).toBe('DRAFTED');
+  expect(bridge.busy).toBe(false);
+  state.queued = true;
+  await bridge.poll();
+  expect(state.executions).toBe(2);
+  expect(state.requests.at(-1)?.input.activeCommand).toBeUndefined();
+  bridge.disconnect();
+});
+it('acknowledges acceptance immediately and keeps polling authoritative cancellation while active', async () => {
   const { bridge, state, command, extensionInstanceId } = setup();
   await bridge.poll();
   expect(state.executions).toBe(1);
@@ -115,7 +138,7 @@ it('acknowledges acceptance immediately and keeps polling authoritative cancella
     commandId: command.id,
     contextId: command.contextId,
     leaseToken: command.leaseToken,
-    step: 'WAITING_USER',
+    step: 'WAITING_AUTO_SEND',
     code: 'SYNTHETIC_WAIT',
   };
   await expect(bridge.progress(progress, 6)).rejects.toThrow('SEND_NOT_ACTIVE');
