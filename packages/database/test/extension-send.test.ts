@@ -338,6 +338,59 @@ describe('extension send queue ordering and recovery', () => {
       q.db.close();
     }
   });
+  it('appendToDraft matches the same contact whether keyed by phone or conversation', () => {
+    const q = queueSetup();
+    try {
+      const phone = '+5500000000002';
+      let tick = 0;
+      const toNumber = (key: string, number = phone) => {
+        tick++;
+        q.setTime(new Date(Date.parse('2026-10-18T12:00:00.000Z') + tick * 1000).toISOString());
+        return q.repo.createToNumber(
+          { phoneNumber: number, text: 'Synthetic draft', mode: 'SUPERVISED', explicitAuthorization: true },
+          key,
+        ).id;
+      };
+      const draftByPhone = (command: { id: string; leaseToken: string }, number = phone) =>
+        q.repo.progress({
+          extensionInstanceId: q.extensionInstanceId,
+          contextId: q.identity.contextId,
+          leaseToken: command.leaseToken,
+          commandId: command.id,
+          step: 'DRAFTED',
+          code: 'SYNTHETIC_STEP',
+          resolvedIdentity: { ...q.identity, phone: number },
+          conversationLabel: 'Synthetic phone contact',
+        });
+      toNumber('synthetic-append-phone-1');
+      const first = q.poll().command!;
+      expect(first.appendToDraft).toBe(false);
+      draftByPhone(first);
+      toNumber('synthetic-append-phone-2');
+      const second = q.poll().command!;
+      expect(second.appendToDraft).toBe(true);
+      q.step(second, 'FAILED');
+      // Simulate a conversation-based draft for the same contact: no phone in its payload.
+      q.db
+        .prepare(
+          "UPDATE wa_outbox SET payload_json=json_remove(payload_json,'$.recipientPhone','$.locateByPhone','$.phoneRequest') WHERE id=?",
+        )
+        .run(first.id);
+      expect(
+        (q.db.prepare('SELECT target_key FROM wa_outbox WHERE id=?').get(first.id) as { target_key: string })
+          .target_key,
+      ).toMatch(/^conv:/);
+      toNumber('synthetic-append-phone-3');
+      const fourth = q.poll().command!;
+      expect(fourth.appendToDraft).toBe(true);
+      q.step(fourth, 'FAILED');
+      toNumber('synthetic-append-phone-4', '+5500000000003');
+      const fifth = q.poll().command!;
+      expect(fifth.appendToDraft).toBe(false);
+    } finally {
+      q.db.close();
+    }
+  });
   it('requeue keeps original position and pauses queue', () => {
     const q = queueSetup();
     try {
@@ -398,6 +451,13 @@ describe('extension send queue ordering and recovery', () => {
           .prepare("SELECT COUNT(*) n FROM wa_outbox_history WHERE command_id=? AND reason_code='EXTENSION_INTERRUPTED_REQUEUED'")
           .get(a),
       ).toEqual({ n: 1 });
+      const codes = (
+        q.db
+          .prepare("SELECT json_extract(event_json,'$.code') code FROM wa_flow_logs WHERE resource_id=? AND component='SQLITE'")
+          .all(a) as { code: string }[]
+      ).map((row) => row.code);
+      expect(codes).toContain('EXTENSION_INTERRUPTED_REQUEUED');
+      expect(codes).not.toContain('EXTENSION_LEASE_EXPIRED');
       const resumed = q.poll().command!;
       expect(resumed.id).toBe(a);
       expect(resumed.leaseToken).not.toBe(command.leaseToken);
@@ -534,6 +594,17 @@ describe('extension send queue ordering and recovery', () => {
         [b, 'QUEUED', 2, 0],
       ]);
       expect(JSON.stringify(queue)).not.toContain('Synthetic reply');
+      const phoneId = q.repo.createToNumber(
+        { phoneNumber: '+5500000000004', text: 'Synthetic hidden', explicitAuthorization: true },
+        'synthetic-queue-hidden-target',
+      ).id;
+      for (const exposed of [JSON.stringify(q.repo.queue()), JSON.stringify(q.repo.status(phoneId))]) {
+        expect(exposed).not.toContain('+5500000000004');
+        expect(exposed).not.toContain('phone:');
+        expect(exposed).not.toContain('conv:');
+        expect(exposed).not.toMatch(/target_?key/i);
+        expect(exposed).not.toContain('Synthetic hidden');
+      }
       expect(q.repo.status(b)).toMatchObject({ position: 2, attempts: 0, mode: 'SUPERVISED' });
       expect(() => q.repo.status(randomUUID())).toThrow('COMMAND_NOT_FOUND');
     } finally {

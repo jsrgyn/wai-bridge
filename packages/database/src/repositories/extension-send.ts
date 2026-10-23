@@ -319,7 +319,7 @@ export class ExtensionSendRepository {
       phase: requeue ? 'SEND_REQUESTED' : next === 'UNKNOWN' ? 'UNKNOWN' : 'FAILED',
       outcome: requeue ? 'WAITING' : next === 'UNKNOWN' ? 'UNKNOWN' : 'FAILED',
       level: requeue ? 'WARN' : 'ERROR',
-      code: 'EXTENSION_LEASE_EXPIRED',
+      code: reason,
     });
   }
   poll(raw: unknown) {
@@ -435,14 +435,7 @@ export class ExtensionSendRepository {
         if (!this.outbox.acquireInterfaceLease(owner, found.id, this.now(), timing.executionTimeoutMs))
           return { command: null };
         const until = new Date(Date.parse(this.now()) + timing.executionTimeoutMs).toISOString();
-        const appendToDraft = Boolean(
-          found.target_key &&
-            this.db
-              .prepare(
-                "SELECT 1 FROM wa_outbox WHERE kind='extension-send' AND status='DRAFTED' AND target_key=? AND id<>? AND (created_at<? OR (created_at=? AND id<?)) LIMIT 1",
-              )
-              .get(found.target_key, found.id, found.created_at, found.created_at, found.id),
-        );
+        const appendToDraft = this.hasEarlierDraft(found);
         const item = this.outbox.transition(
           found.id,
           'QUEUED',
@@ -505,6 +498,7 @@ export class ExtensionSendRepository {
           (item.status !== 'CLAIMED' || payload.mode !== 'AUTO')
         )
           throw new Error('SEND_STATE_CONFLICT');
+        // Legacy step kept in the wire schema so old clients get an error, not a broken host stream.
         else if (input.step === 'WAITING_USER') throw new Error('SEND_STATE_CONFLICT');
         else if (
           input.step === 'DRAFTED' &&
@@ -512,9 +506,10 @@ export class ExtensionSendRepository {
         )
           throw new Error('SEND_STATE_CONFLICT');
         else if (input.step === 'SENDING') {
-          if (item.status !== (payload.mode === 'AUTO' ? 'WAITING_AUTO_SEND' : 'WAITING_USER'))
+          // SENDING is reachable only from the AUTO countdown; SUPERVISED never clicks Send.
+          if (payload.mode !== 'AUTO' || item.status !== 'WAITING_AUTO_SEND')
             throw new Error('SEND_STATE_CONFLICT');
-          if (payload.mode === 'AUTO' && (!item.nextAttemptAt || item.nextAttemptAt > this.now()))
+          if (!item.nextAttemptAt || item.nextAttemptAt > this.now())
             throw new Error('COUNTDOWN_NOT_FINISHED');
         } else if (input.step === 'SENT' && item.status !== 'SENDING')
           throw new Error('SEND_STATE_CONFLICT');
@@ -723,6 +718,48 @@ export class ExtensionSendRepository {
       .prepare('SELECT paused,pause_reason FROM wa_send_queue_state WHERE singleton_id=1')
       .get() as { paused: number; pause_reason: string | null } | undefined;
     return row?.paused ? { paused: true, pauseReason: row.pause_reason } : { paused: false, pauseReason: null };
+  }
+  /** A pending DRAFTED for the same contact, whether it was keyed by phone or by conversation. */
+  private hasEarlierDraft(found: {
+    id: string;
+    payload_json: string;
+    target_key: string | null;
+    created_at: string;
+  }): boolean {
+    const payload = Payload.parse(JSON.parse(found.payload_json));
+    const accountId = payload.target.accountId;
+    let phone = payload.recipientPhone;
+    if (!phone && payload.conversationId) {
+      const row = this.db
+        .prepare(
+          'SELECT c.phone_number AS phone FROM wa_conversation_identities i JOIN wa_contacts c ON c.id=i.peer_contact_id WHERE i.conversation_id=?',
+        )
+        .get(payload.conversationId) as { phone: string | null } | undefined;
+      phone = row?.phone ?? undefined;
+    }
+    const keys = new Set<string>();
+    if (found.target_key) keys.add(found.target_key);
+    if (payload.conversationId) keys.add(`conv:${payload.conversationId}`);
+    if (phone) {
+      keys.add(`phone:${phone}`);
+      const conversations = this.db
+        .prepare(
+          'SELECT i.conversation_id AS id FROM wa_conversation_identities i JOIN wa_contacts c ON c.id=i.peer_contact_id WHERE i.account_id=? AND c.phone_number=?',
+        )
+        .all(accountId, phone) as { id: string }[];
+      for (const { id } of conversations) keys.add(`conv:${id}`);
+    }
+    if (!keys.size) return false;
+    const list = [...keys];
+    return Boolean(
+      this.db
+        .prepare(
+          `SELECT 1 FROM wa_outbox WHERE kind='extension-send' AND status='DRAFTED' AND id<>? AND (created_at<? OR (created_at=? AND id<?))
+        AND json_extract(payload_json,'$.target.accountId')=?
+        AND (target_key IN (${list.map(() => '?').join(',')}) OR (? IS NOT NULL AND json_extract(payload_json,'$.recipientPhone')=?)) LIMIT 1`,
+        )
+        .get(found.id, found.created_at, found.created_at, found.id, accountId, ...list, phone ?? null, phone ?? null),
+    );
   }
   private enqueue(id: string, payload: z.infer<typeof Payload>, targetKey: string) {
     const timing = resolveSendTiming(new SendSettingsRepository(this.db, this.now).get(), payload.timing);
