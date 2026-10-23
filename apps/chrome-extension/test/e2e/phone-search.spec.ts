@@ -28,6 +28,7 @@ declare global {
       profileClicks: number;
       phases: string[];
       hiddenWrites: boolean;
+      backClicks: number;
       searches: string[];
       done: Promise<void>;
       run: () => void;
@@ -50,6 +51,7 @@ for (const scenario of [
   'directory',
   'directory-drawer-stays',
   'new-chat-open',
+  'drawer-opens-late',
   'search-busy',
   'supervised',
   'supervised-context-change',
@@ -91,6 +93,7 @@ for (const scenario of [
         profileClicks: 0,
         phases: [] as string[],
         hiddenWrites: false as boolean,
+        backClicks: 0,
         searches: [] as string[],
         done: Promise.resolve(),
         run: () => {},
@@ -262,6 +265,17 @@ for (const scenario of [
             }, 400);
           }
           state.steps.push(step.step);
+          if (scenario === 'drawer-opens-late' && step.step === 'SENT') {
+            // The job ends with a drawer open whose Back control closes it slowly.
+            const late = document.createElement('aside');
+            late.setAttribute('data-testid', 'new-chat-drawer');
+            late.innerHTML = '<h2>Nova conversa</h2><button aria-label="Voltar">Back</button>';
+            late.querySelector('button')!.addEventListener('click', () => {
+              state.backClicks++;
+              setTimeout(() => late.remove(), 400);
+            });
+            document.body.append(late);
+          }
           state.codes.push(step.code);
           if (
             ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
@@ -367,6 +381,7 @@ for (const scenario of [
       profileClicks: window.phoneCase.profileClicks,
       phases: window.phoneCase.phases,
       hiddenWrites: window.phoneCase.hiddenWrites,
+      backClicks: window.phoneCase.backClicks,
     }));
     if (
       [
@@ -385,6 +400,7 @@ for (const scenario of [
         'directory',
         'directory-drawer-stays',
         'new-chat-open',
+        'drawer-opens-late',
         'search-busy',
         'supervised',
         'supervised-profile-closed',
@@ -406,6 +422,8 @@ for (const scenario of [
       expect(state.hiddenWrites).toBe(false);
       expect(state.clicks).toBe(1);
       expect(state.profileClicks).toBe(1);
+      // The executor finishes only after cleanup closed any late drawer, exactly once.
+      if (scenario === 'drawer-opens-late') expect(state.backClicks).toBe(1);
       expect(state.searches).toEqual(
         ['directory', 'directory-press'].includes(scenario)
           ? ['+12025550123', '', '+12025550123']
@@ -468,6 +486,7 @@ for (const scenario of [
             | 'directory'
             | 'directory-drawer-stays'
             | 'new-chat-open'
+            | 'drawer-opens-late'
             | 'search-busy'
             | 'supervised'
             | 'supervised-profile-closed'

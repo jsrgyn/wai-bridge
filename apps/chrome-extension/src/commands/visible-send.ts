@@ -214,7 +214,7 @@ export class VisibleSendExecutor {
       });
     } finally {
       try {
-        search?.release(controller.signal);
+        await search?.release(controller.signal);
       } finally {
         this.resolved = undefined;
         box.remove();
