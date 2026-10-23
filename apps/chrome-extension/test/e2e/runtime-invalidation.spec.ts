@@ -200,6 +200,7 @@ test('reload mid-request: bridge drops active, next poll omits activeCommand, th
     timing: { autoCountdownMs: 30000, executionTimeoutMs: 60000, queueMaxWaitMs: 1800000, sendVerifyMs: 15000 },
     appendToDraft: false,
   };
+  const command_ = command;
   await bridge.poll();
   expect(bridge.busy).toBe(true);
   await bridge.poll();
@@ -214,6 +215,16 @@ test('reload mid-request: bridge drops active, next poll omits activeCommand, th
   await loadContent();
   await bridge.poll();
   expect(requests.at(-1)?.input).toMatchObject({ reason: 'READY' });
+  expect(requests.at(-1)?.input.activeCommand).toBeUndefined();
+
+  // Reload that completes between polls: no rejection window, only the real
+  // content script reporting that it has no job.
+  command = { ...command_, id: '66666666-6666-4666-8666-666666666666' };
+  await bridge.poll();
+  expect(bridge.busy).toBe(true);
+  await loadContent();
+  await bridge.poll();
+  expect(bridge.busy).toBe(false);
   expect(requests.at(-1)?.input.activeCommand).toBeUndefined();
   bridge.disconnect();
 });

@@ -477,7 +477,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   void (async () => {
     await connectNative();
     if (!syncBridge.busy) await sendBridge.poll();
-  })().catch(() => undefined);
+  })().catch((error) =>
+    emitFlow(flowSink, {
+      traceId: crypto.randomUUID(),
+      component: 'EXTENSION_BACKGROUND',
+      phase: 'FAILED',
+      outcome: 'FAILED',
+      code: flowCode(error),
+    }),
+  );
 });
 
 chrome.runtime.onInstalled.addListener(() => {
