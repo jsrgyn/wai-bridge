@@ -11,7 +11,11 @@ import {
   type NativeResponse,
 } from '../../packages/shared/src/index.js';
 
-it.each(['current','search','number'])('native host delivers a scoped command (%s) and persists execution/result', async (scenario) => {
+const scenarios = ['current', 'search', 'number'] as const;
+it.each(
+  scenarios.flatMap((scenario) => (['AUTO', 'SUPERVISED'] as const).map((mode) => [scenario, mode] as const)),
+)('native host delivers a scoped command (%s, %s) and persists execution/result', async (scenario, mode) => {
+  const auto = mode === 'AUTO';
   const locateByPhone=scenario!=='current';
   const direct=scenario==='number';
   const token = 'synthetic-native-send-token-0123456789';
@@ -62,8 +66,9 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
     payload: {
       ...(direct?{phoneNumber:'+12025550199'}:{conversationId}),
       text: 'Synthetic manual reply',
-      mode: 'SUPERVISED',
+      mode,
       explicitAuthorization: true,
+      ...(auto ? { timing: { autoCountdownMs: 0 } } : {}),
       ...(!direct&&locateByPhone?{locateByPhone:true}:{}),
     },
   });
@@ -136,10 +141,12 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
     expect(command).toMatchObject({
       id: created.json().id,
       contextId: pollIdentity.contextId,
-      mode: 'SUPERVISED',
+      mode,
+      appendToDraft: false,
     });
-    for (const step of ['WAITING_USER', 'SENDING', 'SENT'] as const) {
-      const result = await send({
+    if (auto) expect(command.timing.autoCountdownMs).toBe(0);
+    const progress = (step: 'WAITING_USER' | 'WAITING_AUTO_SEND' | 'SENDING' | 'SENT' | 'DRAFTED') =>
+      send({
         type: 'SEND_PROGRESS',
         input: {
           extensionInstanceId,
@@ -148,10 +155,17 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
           leaseToken: command.leaseToken,
           step,
           code: 'SYNTHETIC_NATIVE_STEP',
-          ...(locateByPhone && step === 'WAITING_USER' ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
+          ...(locateByPhone && step !== 'SENDING' && step !== 'SENT' ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
           ...(step === 'SENT' ? { evidence: `visible-outbound:${'b'.repeat(64)}` } : {}),
         },
       } as Omit<NativeRequest, 'version' | 'id'>);
+    // The legacy supervised hand-off is no longer accepted for new requests.
+    expect((await progress('WAITING_USER')).type).toBe('ERROR');
+    expect(
+      db.prepare('SELECT status FROM wa_outbox WHERE id=?').get(command.id),
+    ).toEqual({ status: 'CLAIMED' });
+    for (const step of auto ? (['WAITING_AUTO_SEND', 'SENDING', 'SENT'] as const) : (['DRAFTED'] as const)) {
+      const result = await progress(step);
       expect(result).toMatchObject({
         type: 'SEND_PROGRESS_RESULT',
         result: { ok: true, status: step },
@@ -162,7 +176,9 @@ it.each(['current','search','number'])('native host delivers a scoped command (%
       url: `/api/outbox/${command.id}`,
       headers,
     });
-    expect(persisted.json().command.status).toBe('SENT');
+    expect(persisted.json().command.status).toBe(auto ? 'SENT' : 'DRAFTED');
+    // Terminal steps release the single interface lease so the next request can run.
+    expect(db.prepare('SELECT COUNT(*) n FROM wa_outbox_interface_lease').get()).toEqual({ n: 0 });
     expect(persisted.json().command.lease_owner).toBeUndefined();
     expect(JSON.stringify(persisted.json().history)).not.toContain(command.leaseToken);
     const replay = await send({

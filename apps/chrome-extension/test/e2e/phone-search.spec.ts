@@ -28,6 +28,7 @@ declare global {
       profileClicks: number;
       phases: string[];
       hiddenWrites: boolean;
+      backClicks: number;
       searches: string[];
       done: Promise<void>;
       run: () => void;
@@ -48,9 +49,12 @@ for (const scenario of [
   'already-verified-profile',
   'direct-number',
   'directory',
+  'directory-drawer-stays',
+  'new-chat-open',
+  'drawer-opens-late',
+  'search-busy',
   'supervised',
   'supervised-context-change',
-  'supervised-profile-closed',
   'supervised-hidden',
   'not-found',
   'profile-open',
@@ -61,7 +65,6 @@ for (const scenario of [
   'ambiguous',
   'draft',
   'wrong-account',
-  'search-busy',
   'profile-change',
   'group',
   'user-interference',
@@ -69,7 +72,6 @@ for (const scenario of [
   test(`phone search ${scenario} verifies recipient before any synthetic send`, async ({
     page,
   }) => {
-    if (scenario === 'supervised-profile-closed') await page.clock.install();
     await page.route('https://phone.test/**', (route) =>
       route.fulfill({
         contentType: 'text/html',
@@ -89,6 +91,7 @@ for (const scenario of [
         profileClicks: 0,
         phases: [] as string[],
         hiddenWrites: false as boolean,
+        backClicks: 0,
         searches: [] as string[],
         done: Promise.resolve(),
         run: () => {},
@@ -113,6 +116,13 @@ for (const scenario of [
         document.body.append(drawer);
       }
       if (scenario === 'search-busy') input.value = 'Synthetic user search';
+      const withBack = (drawer: HTMLElement) => {
+        const back = document.createElement('button');
+        back.setAttribute('aria-label', 'Voltar');
+        back.textContent = 'Back synthetic';
+        back.addEventListener('click', () => drawer.remove());
+        drawer.prepend(back);
+      };
       if (scenario === 'draft')
         document.querySelector('[contenteditable]')!.textContent = 'Synthetic draft';
       const onSearch = (field: HTMLInputElement) => {
@@ -126,7 +136,7 @@ for (const scenario of [
         list.replaceChildren();
         if (
           scenario === 'not-found' ||
-          (['directory', 'directory-press'].includes(scenario) &&
+          (['directory', 'directory-press', 'directory-drawer-stays'].includes(scenario) &&
             !input.closest('[data-testid="new-chat-drawer"]'))
         )
           return;
@@ -165,7 +175,8 @@ for (const scenario of [
                 document.activeElement !== selectionTarget)
             )
               throw new Error('SYNTHETIC_WRONG_SELECTION_TARGET');
-            input.closest('[data-testid="new-chat-drawer"]')?.remove();
+            if (scenario !== 'directory-drawer-stays')
+              input.closest('[data-testid="new-chat-drawer"]')?.remove();
             row.querySelector('[aria-selected]')!.setAttribute('aria-selected', 'true');
             const updateHeader = () => {
               document.querySelector(
@@ -208,7 +219,17 @@ for (const scenario of [
         }
       };
       input.addEventListener('input', () => onSearch(input));
-      if (['directory', 'directory-press', 'not-found'].includes(scenario)) {
+      if (scenario === 'new-chat-open') {
+        const leftover = document.createElement('aside');
+        leftover.setAttribute('data-testid', 'new-chat-drawer');
+        leftover.innerHTML =
+          '<h2>Nova conversa</h2><input aria-label="Pesquisar nome, número ou @nomedeusuário" value="Synthetic leftover"/><section></section>';
+        withBack(leftover);
+        document.body.append(leftover);
+      }
+      if (
+        ['directory', 'directory-press', 'directory-drawer-stays', 'not-found'].includes(scenario)
+      ) {
         const newChat = document.createElement('button');
         newChat.setAttribute('aria-label', 'Nova conversa');
         newChat.textContent = 'New synthetic chat';
@@ -217,6 +238,7 @@ for (const scenario of [
           drawer.setAttribute('data-testid', 'new-chat-drawer');
           drawer.innerHTML =
             '<h2>Nova conversa</h2><input aria-label="Pesquisar nome, número ou @nomedeusuário"/><section></section>';
+          withBack(drawer);
           document.body.append(drawer);
           const directoryInput = drawer.querySelector('input')!;
           directoryInput.addEventListener('input', () => onSearch(directoryInput));
@@ -227,23 +249,27 @@ for (const scenario of [
         identity,
         async (_command, step) => {
           if (
-            ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
+            ['DRAFTED', 'WAITING_AUTO_SEND'].includes(step.step) &&
             (step.resolvedIdentity?.type !== 'UI_CONTEXT' ||
               step.resolvedIdentity.phone !== '+12025550123' ||
               step.conversationLabel !== 'Synthetic result')
           )
             throw new Error('SYNTHETIC_MISSING_PROFILE_PROOF');
-          if (scenario === 'supervised-hidden' && step.step === 'WAITING_USER') {
-            let hidden = true;
-            Object.defineProperty(document, 'hidden', { get: () => hidden });
-            setTimeout(() => {
-              hidden = false;
-            }, 400);
-          }
           state.steps.push(step.step);
+          if (scenario === 'drawer-opens-late' && step.step === 'SENT') {
+            // The job ends with a drawer open whose Back control closes it slowly.
+            const late = document.createElement('aside');
+            late.setAttribute('data-testid', 'new-chat-drawer');
+            late.innerHTML = '<h2>Nova conversa</h2><button aria-label="Voltar">Back</button>';
+            late.querySelector('button')!.addEventListener('click', () => {
+              state.backClicks++;
+              setTimeout(() => late.remove(), 400);
+            });
+            document.body.append(late);
+          }
           state.codes.push(step.code);
           if (
-            ['WAITING_USER', 'WAITING_AUTO_SEND'].includes(step.step) &&
+            ['DRAFTED', 'WAITING_AUTO_SEND'].includes(step.step) &&
             document.querySelector('[data-testid="chat-info-drawer"]')
           )
             throw new Error('SYNTHETIC_PROFILE_NOT_CLOSED');
@@ -289,8 +315,31 @@ for (const scenario of [
           mode: scenario.startsWith('supervised') ? 'SUPERVISED' : 'AUTO',
           explicitAuthorization: true,
           leaseUntil: new Date(Date.now() + 180000).toISOString(),
+          timing: {
+            autoCountdownMs: 5000,
+            executionTimeoutMs: 60000,
+            queueMaxWaitMs: 1800000,
+            sendVerifyMs: 15000,
+          },
+          appendToDraft: false,
         });
       };
+      if (scenario === 'supervised-context-change' || scenario === 'supervised-hidden') {
+        // Change the context right after the composer receives the text: the
+        // post-compose revalidation must block DRAFTED.
+        const original = document.execCommand.bind(document);
+        document.execCommand = (name, ui, value) => {
+          const result = original(name, ui, value);
+          if (name !== 'insertText') return result;
+          if (scenario === 'supervised-hidden')
+            Object.defineProperty(document, 'hidden', { get: () => true });
+          else
+            document.querySelector(
+              '#main [data-testid="conversation-info-header-chat-title"]',
+            )!.textContent = 'Different synthetic contact';
+          return result;
+        };
+      }
       if (scenario === 'hidden-start') {
         let hidden = true;
         Object.defineProperty(document, 'hidden', { get: () => hidden });
@@ -304,32 +353,6 @@ for (const scenario of [
       await page
         .getByRole('textbox', { name: 'Pesquisar ou começar uma nova conversa' })
         .fill('Synthetic user input');
-    if (scenario.startsWith('supervised')) {
-      await expect
-        .poll(() => page.evaluate(() => window.phoneCase.steps))
-        .toEqual(['WAITING_USER']);
-      if (scenario === 'supervised-hidden')
-        await expect.poll(() => page.evaluate(() => document.hidden)).toBe(false);
-      expect(await page.evaluate(() => window.phoneCase.clicks)).toBe(0);
-      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
-      if (scenario === 'supervised-context-change') {
-        await page.evaluate(() => {
-          document.querySelector(
-            '[data-testid="conversation-info-header-chat-title"]',
-          )!.textContent = 'Different synthetic contact';
-        });
-      } else {
-        if (scenario === 'supervised-profile-closed') {
-          // Several validation ticks must accept absence of the confirmed panel.
-          await expect
-            .poll(() => page.evaluate(() => window.phoneCase.steps.at(-1)))
-            .toBe('WAITING_USER');
-          await page.clock.fastForward(21_000);
-          expect(await page.evaluate(() => window.phoneCase.steps)).toEqual(['WAITING_USER']);
-        }
-        await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-      }
-    }
     await page.evaluate(() => window.phoneCase.done);
     const state = await page.evaluate(() => ({
       steps: window.phoneCase.steps,
@@ -339,6 +362,7 @@ for (const scenario of [
       profileClicks: window.phoneCase.profileClicks,
       phases: window.phoneCase.phases,
       hiddenWrites: window.phoneCase.hiddenWrites,
+      backClicks: window.phoneCase.backClicks,
     }));
     if (
       [
@@ -355,16 +379,18 @@ for (const scenario of [
         'profile-controls',
         'hidden-start',
         'directory',
+        'directory-drawer-stays',
+        'new-chat-open',
+        'drawer-opens-late',
+        'search-busy',
+        'draft',
         'supervised',
-        'supervised-profile-closed',
-        'supervised-hidden',
       ].includes(scenario)
     ) {
-      expect(state.steps).toEqual([
-        scenario.startsWith('supervised') ? 'WAITING_USER' : 'WAITING_AUTO_SEND',
-        'SENDING',
-        'SENT',
-      ]);
+      // SUPERVISED ends with the verified draft and never clicks Send.
+      expect(state.steps).toEqual(
+        scenario === 'supervised' ? ['DRAFTED'] : ['WAITING_AUTO_SEND', 'SENDING', 'SENT'],
+      );
       expect(state.phases.indexOf('CHAT_OPEN_STARTED')).toBeGreaterThanOrEqual(0);
       expect(state.phases.indexOf('CHAT_OPENED')).toBeGreaterThan(
         state.phases.indexOf('CHAT_OPEN_STARTED'),
@@ -373,16 +399,35 @@ for (const scenario of [
         state.phases.indexOf('CHAT_OPENED'),
       );
       expect(state.hiddenWrites).toBe(false);
-      expect(state.clicks).toBe(1);
+      // 'supervised' also proves a profile drawer closed by resetAfterVerify still validates.
+      expect(state.clicks).toBe(scenario === 'supervised' ? 0 : 1);
+      if (scenario === 'supervised')
+        await expect(page.locator('#main footer [contenteditable]')).not.toBeEmpty();
       expect(state.profileClicks).toBe(1);
+      // The executor finishes only after cleanup closed any late drawer, exactly once.
+      if (scenario === 'drawer-opens-late') expect(state.backClicks).toBe(1);
       expect(state.searches).toEqual(
         ['directory', 'directory-press'].includes(scenario)
           ? ['+12025550123', '', '+12025550123']
-          : ['+12025550123', ''],
+          : scenario === 'directory-drawer-stays'
+            ? ['+12025550123', '', '+12025550123', '']
+            : scenario === 'search-busy'
+              ? ['', '+12025550123', '']
+              : ['+12025550123', ''],
       );
+      // Initial UI state restored: search empty, drawers closed, target chat open.
+      await expect(
+        page.getByRole('textbox', { name: 'Pesquisar ou começar uma nova conversa' }),
+      ).toHaveValue('');
+      expect(await page.locator('[data-testid="new-chat-drawer"]').count()).toBe(0);
+      expect(await page.locator('[data-testid="chat-info-drawer"]').count()).toBe(0);
+      await expect(
+        page.locator('#main [data-testid="conversation-info-header-chat-title"]'),
+      ).toHaveText('Synthetic result');
     } else {
       expect(state.clicks).toBe(0);
       expect(state.steps).not.toContain('SENDING');
+      expect(state.steps).not.toContain('DRAFTED');
       expect(state.steps.at(-1)).toBe('FAILED');
       if (scenario === 'no-navigation') {
         expect(state.phases).toContain('CHAT_OPEN_STARTED');
@@ -400,13 +445,12 @@ for (const scenario of [
           'profile-close-unavailable': 'PROFILE_CLOSE_UNAVAILABLE',
           'wrong-phone': 'RECIPIENT_PHONE_MISMATCH',
           ambiguous: 'AMBIGUOUS_PHONE_RESULTS',
-          draft: 'COMPOSER_HAS_DRAFT',
           'wrong-account': 'RECIPIENT_ACCOUNT_MISMATCH',
-          'search-busy': 'SEARCH_HAS_INPUT',
           'profile-change': 'RECIPIENT_PHONE_MISMATCH',
-          'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
           group: 'RECIPIENT_IS_GROUP',
           'user-interference': 'USER_INTERFERENCE',
+          'supervised-context-change': 'RECIPIENT_CONTEXT_MISMATCH',
+          'supervised-hidden': 'WHATSAPP_TAB_NOT_VISIBLE',
         }[
           scenario as Exclude<
             typeof scenario,
@@ -423,9 +467,12 @@ for (const scenario of [
             | 'profile-controls'
             | 'hidden-start'
             | 'directory'
+            | 'directory-drawer-stays'
+            | 'new-chat-open'
+            | 'drawer-opens-late'
+            | 'search-busy'
+            | 'draft'
             | 'supervised'
-            | 'supervised-profile-closed'
-            | 'supervised-hidden'
           >
         ],
       );

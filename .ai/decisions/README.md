@@ -7,3 +7,5 @@ Cada ADR deve incluir: título, data, status (`Proposed`, `Accepted`, `Supersede
 ## Índice
 
 - [0022 — Proteção de privacidade no repositório público](0022-public-repository-privacy-hardening.md)
+- [0023 — Fluxo de agentes com o plugin Superpowers](0023-superpowers-agent-workflow.md)
+- [0024 — Fila de envio contínua da extensão](0024-continuous-extension-send-queue.md)

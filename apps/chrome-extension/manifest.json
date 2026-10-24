@@ -14,7 +14,8 @@
   "permissions": [
     "activeTab",
     "storage",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms"
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*"

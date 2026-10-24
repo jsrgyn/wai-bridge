@@ -3,7 +3,7 @@ import { build, stop } from 'esbuild';
 import type { VisibleSendExecutor } from '../../src/commands/visible-send.js';
 import type { IdentityContext } from '../../src/identity/context.js';
 import type { ExtensionSendCommand } from '@wai-bridge/shared';
-type TestState = { clicks: number; steps: string[]; beforeSending: boolean };
+type TestState = { clicks: number; steps: string[]; codes: string[]; beforeSending: boolean };
 declare global {
   interface Window {
     __waiClasses: {
@@ -12,6 +12,7 @@ declare global {
     };
     __state: TestState;
     __start: () => void;
+    __startNext: (text: string, appendToDraft: boolean) => void;
     __result: Promise<void>;
     __executor: VisibleSendExecutor;
     __identity: IdentityContext;
@@ -34,12 +35,22 @@ stop();
 async function setup(
   page: Page,
   mode: 'AUTO' | 'SUPERVISED' = 'AUTO',
-  options: { enabled?: boolean; failSending?: boolean; pending?: boolean; draft?: boolean } = {},
+  options: {
+    enabled?: boolean;
+    failSending?: boolean;
+    pending?: boolean;
+    draft?: string;
+    autoCountdownMs?: number;
+    sendVerifyMs?: number;
+    appendToDraft?: boolean;
+    text?: string;
+    otherChatDraft?: string;
+  } = {},
 ) {
   await page.route('https://wai.test/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
-      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ? 'Existing synthetic draft' : ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>`,
+      body: `<main id="main"><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title">Synthetic person</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" style="min-height:24px">${options.draft ?? ''}</div><button type="button" aria-label="Enviar">Enviar</button></footer></main><aside data-testid="chat-info-drawer"><div data-testid="contact-info-header"><h2>Dados do contato</h2></div><span>+1 (202) 555-0123</span></aside>${options.otherChatDraft === undefined ? '' : `<section id="other-chat"><footer><div id="other-composer" role="textbox" contenteditable="true" style="min-height:24px">${options.otherChatDraft}</div></footer></section>`}`,
     }),
   );
   await page.goto('https://wai.test/');
@@ -62,16 +73,24 @@ async function setup(
         leaseToken: '44444444-4444-4444-8444-444444444444',
         contextId: bound.contextId,
         target: { accountId: bound.accountId, type: 'PHONE', referenceKey: bound.phone },
-        text: 'Synthetic good night ❤️',
+        text: options.text ?? 'Synthetic good night ❤️',
         mode,
         explicitAuthorization: true,
         leaseUntil: new Date(Date.now() + 180_000).toISOString(),
+        timing: {
+          autoCountdownMs: options.autoCountdownMs ?? 5000,
+          executionTimeoutMs: 60000,
+          queueMaxWaitMs: 1800000,
+          sendVerifyMs: options.sendVerifyMs ?? 15000,
+        },
+        appendToDraft: options.appendToDraft ?? false,
       };
-      win.__state = { clicks: 0, steps: [], beforeSending: false };
+      win.__state = { clicks: 0, steps: [], codes: [], beforeSending: false };
       const executor = new win.__waiClasses.VisibleSendExecutor(
         identity,
-        async (_command: unknown, step: { step: string }) => {
+        async (_command: unknown, step: { step: string; code: string }) => {
           win.__state.steps.push(step.step);
+          win.__state.codes.push(step.code);
           if (step.step === 'SENDING') {
             if (options.failSending) throw new Error('PROGRESS_UNAVAILABLE');
             win.__state.beforeSending = true;
@@ -97,6 +116,15 @@ async function setup(
       });
       win.__start = () => {
         win.__result = executor.execute(command);
+      };
+      win.__startNext = (text: string, appendToDraft: boolean) => {
+        win.__result = executor.execute({
+          ...command,
+          id: '55555555-5555-4555-8555-555555555555',
+          leaseToken: '66666666-6666-4666-8666-666666666666',
+          text,
+          appendToDraft,
+        });
       };
     },
     { mode, options },
@@ -132,27 +160,50 @@ test('AUTO sends once after five seconds and durable acknowledgement, with visib
   ).rejects.toThrow('COMMAND_ALREADY_ATTEMPTED');
   expect((await page.evaluate(() => window.__state)).clicks).toBe(1);
 });
-test('SUPERVISED waits for manual click and records SENDING before the synthetic send', async ({
+test('supervised leaves text in composer, target chat open, reports DRAFTED without user click', async ({
   page,
 }) => {
   await setup(page, 'SUPERVISED');
   await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  expect((await page.evaluate(() => window.__state)).clicks).toBe(0);
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-  expect(await result(page)).toMatchObject({
-    clicks: 1,
-    steps: ['WAITING_USER', 'SENDING', 'SENT'],
-  });
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  await expect(page.getByRole('textbox')).toHaveText('Synthetic good night ❤️');
+  await expect(page.locator('[data-testid="conversation-info-header-chat-title"]')).toHaveText(
+    'Synthetic person',
+  );
+  await expect(page.getByRole('status')).toHaveCount(0);
+});
+test('supervised replaces an existing draft, including its own earlier text, without duplicating', async ({
+  page,
+}) => {
+  for (const draft of ['Existing synthetic draft', 'Synthetic good night ❤️']) {
+    await setup(page, 'SUPERVISED', { draft });
+    await start(page);
+    expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+    await expect(page.getByRole('textbox')).toHaveText('Synthetic good night ❤️');
+  }
+});
+test('auto with countdown 0 sends immediately and reports SENT', async ({ page }) => {
+  await setup(page, 'AUTO', { autoCountdownMs: 0 });
+  const startAt = Date.now();
+  await start(page);
+  const state = await result(page);
+  expect(Date.now() - startAt).toBeLessThan(4000);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'SENT'] });
+});
+test('auto uses configured verify timeout', async ({ page }) => {
+  await setup(page, 'AUTO', { autoCountdownMs: 0, sendVerifyMs: 5000, pending: true });
+  const startAt = Date.now();
+  await start(page);
+  const state = await result(page);
+  expect(Date.now() - startAt).toBeLessThan(9000);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'UNKNOWN'] });
 });
 test('fails closed if durable SENDING reply is lost', async ({ page }) => {
-  await setup(page, 'SUPERVISED', { failSending: true });
+  await setup(page, 'AUTO', { autoCountdownMs: 0, failSending: true });
   await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
   expect(await result(page)).toMatchObject({
     clicks: 0,
-    steps: ['WAITING_USER', 'SENDING', 'UNKNOWN'],
+    steps: ['WAITING_AUTO_SEND', 'SENDING', 'UNKNOWN'],
   });
 });
 test('cancels during countdown without clicking send', async ({ page }) => {
@@ -164,11 +215,8 @@ test('cancels during countdown without clicking send', async ({ page }) => {
     steps: ['WAITING_AUTO_SEND', 'CANCELLED'],
   });
 });
-test('rejects disabled gate and existing drafts without editing or sending', async ({ page }) => {
-  await setup(page, 'AUTO', { enabled: false });
-  await start(page);
-  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['FAILED'] });
-  await setup(page, 'AUTO', { draft: true });
+test('rejects disabled gate without editing or sending', async ({ page }) => {
+  await setup(page, 'AUTO', { enabled: false, draft: 'Existing synthetic draft' });
   await start(page);
   expect(await result(page)).toMatchObject({ clicks: 0, steps: ['FAILED'] });
   await expect(page.getByRole('textbox')).toHaveText('Existing synthetic draft');
@@ -187,17 +235,6 @@ test('rejects changed context during countdown and revoked opt-in', async ({ pag
   await page.evaluate(() => window.__executor.setEnabled(false));
   expect((await result(page)).clicks).toBe(0);
 });
-test('pending bubble is UNKNOWN and never clicked twice', async ({ page }) => {
-  await setup(page, 'SUPERVISED', { pending: true });
-  await start(page);
-  await expect(page.getByRole('status')).toContainText('confira');
-  await page.getByRole('button', { name: 'Enviar', exact: true }).click();
-  expect(await result(page)).toMatchObject({
-    clicks: 1,
-    steps: ['WAITING_USER', 'SENDING', 'UNKNOWN'],
-  });
-});
-
 for (const behavior of [
   'false-after-insert',
   'delayed-insert',
@@ -232,13 +269,120 @@ for (const behavior of [
       expect(state.steps).not.toContain('SENDING');
       return;
     }
-    await expect
-      .poll(() => page.evaluate(() => window.__state.steps.includes('WAITING_USER')))
-      .toBe(true);
-    expect(await page.evaluate(() => window.__state.clicks)).toBe(0);
-    await page.evaluate(() => window.__executor.cancel());
     const state = await result(page);
-    expect(state.steps).toContain('CANCELLED');
-    expect(state.clicks).toBe(0);
+    expect(state).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
   });
 }
+
+async function composerText(page: Page) {
+  return page.locator('#main [role="textbox"]').evaluate((e) => (e as HTMLElement).innerText.trim());
+}
+test('second supervised request to same target appends on new line', async ({ page }) => {
+  await setup(page, 'SUPERVISED', { text: 'Synthetic first note' });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  await page.evaluate(() => window.__startNext('Synthetic second note', true));
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED', 'DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic first note\nSynthetic second note');
+});
+test('user-edited draft is preserved and new text appended at end', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note, edited by user',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe(
+    'Synthetic first note, edited by user\nSynthetic second note',
+  );
+});
+test('foreign text in target composer is erased when no earlier DRAFTED', async ({ page }) => {
+  await setup(page, 'SUPERVISED', { draft: 'Foreign synthetic text', appendToDraft: false });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic good night ❤️');
+});
+test('requeued append does not duplicate text', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note<br>Synthetic second note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic first note\nSynthetic second note');
+});
+test('composer of a different chat is never touched', async ({ page }) => {
+  for (const appendToDraft of [false, true]) {
+    await setup(page, 'SUPERVISED', {
+      draft: 'Synthetic first note',
+      text: 'Synthetic second note',
+      appendToDraft,
+      otherChatDraft: 'Other synthetic chat draft',
+    });
+    await start(page);
+    expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+    await expect(page.locator('#other-composer')).toHaveText('Other synthetic chat draft');
+    expect(await composerText(page)).toBe(
+      appendToDraft ? 'Synthetic first note\nSynthetic second note' : 'Synthetic second note',
+    );
+  }
+});
+test('AUTO with appendToDraft fails without touching the pending draft', async ({ page }) => {
+  await setup(page, 'AUTO', {
+    draft: 'Synthetic first note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+    autoCountdownMs: 0,
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({
+    clicks: 0,
+    steps: ['FAILED'],
+    codes: ['DRAFT_PENDING_ON_TARGET'],
+  });
+  expect(state.steps).not.toContain('SENDING');
+  expect(await composerText(page)).toBe('Synthetic first note');
+});
+test('AUTO after an earlier DRAFTED sends when the target composer is empty', async ({ page }) => {
+  await setup(page, 'AUTO', {
+    text: 'Synthetic second note',
+    appendToDraft: true,
+    autoCountdownMs: 0,
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({ clicks: 1, steps: ['WAITING_AUTO_SEND', 'SENDING', 'SENT'] });
+});
+test('append fails closed when the line break is not rendered', async ({ page }) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic first note',
+    text: 'Synthetic second note',
+    appendToDraft: true,
+  });
+  await page.evaluate(() => {
+    const original = document.execCommand.bind(document);
+    document.execCommand = (name, ui, value) =>
+      name === 'insertLineBreak' ? true : original(name, ui, value);
+  });
+  await start(page);
+  await result(page);
+  const state = await page.evaluate(() => window.__state);
+  expect(state).toMatchObject({ clicks: 0, steps: ['FAILED'], codes: ['COMPOSE_FAILED'] });
+});
+test('append still happens when the draft only ends with the same words mid-line', async ({
+  page,
+}) => {
+  await setup(page, 'SUPERVISED', {
+    draft: 'Synthetic see you tomorrow',
+    text: 'tomorrow',
+    appendToDraft: true,
+  });
+  await start(page);
+  expect(await result(page)).toMatchObject({ clicks: 0, steps: ['DRAFTED'] });
+  expect(await composerText(page)).toBe('Synthetic see you tomorrow\ntomorrow');
+});

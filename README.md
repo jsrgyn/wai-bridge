@@ -115,7 +115,7 @@ Abra `chrome-extension://<ID_DA_EXTENSAO>/dashboard.html` ou o link no popup. O 
 - **Lotes:** consulta relatório, cancela próximos passos, retoma ou cria um novo lote somente com itens que falharam após pedido explícito. A navegação serial só começa após pedido explícito via ferramenta MCP; a lista do painel não dispara leitura.
 - **Backup e manutenção:** consulta/configura backups locais verificados. Limpeza adicional de backups/logs vem desativada; exige ativação e confirmação específicas. A manutenção não apaga contatos, conversas, mensagens ou auditoria.
 
-O popup também controla monitoramento, mostra estado local e possui um opt-in independente para comandos de envio originados pelo MCP. SUPERVISED aguarda ação manual; AUTO continua sujeito a autorização explícita, gates e evidência do runtime. Não faça testes de envio em uma conta real.
+O popup também controla monitoramento, mostra estado local e possui um opt-in independente para comandos de envio originados pelo MCP. SUPERVISED deixa o rascunho pronto no contato (`DRAFTED`) sem aguardar clique, e os pedidos seguem numa fila com status, tempos configuráveis no painel; AUTO continua sujeito a autorização explícita, gates e evidência do runtime. Não faça testes de envio em uma conta real.
 
 ## Executar e testar a API local
 

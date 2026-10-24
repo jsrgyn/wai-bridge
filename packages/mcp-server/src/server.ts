@@ -571,7 +571,7 @@ export function createMcpServer({
   tool(
     server,
     'whatsapp_send_message',
-    'Request a send by the WAI Bridge extension, never by external browser automation. Set locateByPhone=true to search by the stored phone and verify the visible profile before sending to a direct contact. Requires a registered conversation UUID, explicit user authorization and extension/MCP opt-in. SUPERVISED prepares for manual send; AUTO waits five cancelable seconds. Returns an outbox ID: inspect whatsapp_get_outbox_status for actual result. UNKNOWN must never be retried automatically.',
+    'Request a send by the WAI Bridge extension, never by external browser automation. Set locateByPhone=true to search by the stored phone and verify the visible profile before sending to a direct contact. Requires a registered conversation UUID, explicit user authorization and extension/MCP opt-in. SUPERVISED prepares a draft and finishes as DRAFTED; AUTO waits the configured cancelable countdown (0 s gives priority). Returns an outbox ID: inspect whatsapp_get_outbox_status for actual result. UNKNOWN must never be retried automatically.',
     { ...ExtensionSendRequestSchema.shape, idempotencyKey: z.string().min(16).max(128) },
     async (i) => {
       if (!allowExtensionSends)
@@ -588,7 +588,7 @@ export function createMcpServer({
   tool(
     server,
     'whatsapp_send_to_number',
-    'Request a send directly by international phone number (+DDI) and text, without a conversation UUID. Requires explicit user authorization and extension opt-in. With no accountId, exactly one recently active opted-in local account is required. The extension searches the number, opens the result and verifies its visible profile before composing. No match or ambiguous/mismatching profile means no send. SUPERVISED is default; AUTO waits five cancelable seconds. Returns REQUESTED, not delivery. Inspect whatsapp_get_outbox_status; never automatically retry UNKNOWN.',
+    'Request a send directly by international phone number (+DDI) and text, without a conversation UUID. Requires explicit user authorization and extension opt-in. With no accountId, exactly one recently active opted-in local account is required. The extension searches the number, opens the result and verifies its visible profile before composing. No match or ambiguous/mismatching profile means no send. SUPERVISED is default and finishes as DRAFTED; AUTO waits the configured cancelable countdown (0 s gives priority). Returns REQUESTED, not delivery. Inspect whatsapp_get_outbox_status; never automatically retry UNKNOWN.',
     { ...ExtensionPhoneSendRequestSchema.shape, idempotencyKey: z.string().min(16).max(128) },
     async (i) => {
       if (!allowExtensionSends)
@@ -605,7 +605,7 @@ export function createMcpServer({
   tool(
     server,
     'whatsapp_send_to_contact',
-    'Request an explicitly authorized send to a contact by its stored name (for example esposa only if that name exists). The API resolves the SQLite name within the active local account to one phone, then the extension searches WhatsApp and verifies the profile. No inferred relationship or guessed number. Missing phone/name or ambiguous numbers fail without sending; ask for the full international number and use whatsapp_send_to_number instead. SUPERVISED prepares for manual send; AUTO waits five cancelable seconds. Inspect whatsapp_get_outbox_status; never retry UNKNOWN automatically.',
+    'Request an explicitly authorized send to a contact by its stored name (for example esposa only if that name exists). The API resolves the SQLite name within the active local account to one phone, then the extension searches WhatsApp and verifies the profile. No inferred relationship or guessed number. Missing phone/name or ambiguous numbers fail without sending; ask for the full international number and use whatsapp_send_to_number instead. SUPERVISED prepares a draft and finishes as DRAFTED; AUTO waits the configured cancelable countdown (0 s gives priority). Inspect whatsapp_get_outbox_status; never retry UNKNOWN automatically.',
     { ...ExtensionRecipientSendRequestSchema.shape, idempotencyKey: z.string().min(16).max(128) },
     async (i) => {
       if (!allowExtensionSends)
@@ -618,6 +618,22 @@ export function createMcpServer({
       });
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  );
+  tool(
+    server,
+    'whatsapp_get_send_queue',
+    'Read the durable WAI Bridge extension send queue in execution order, with per-request status, priority and position, plus whether the queue is paused. Read-only; does not require the extension send opt-in.',
+    {},
+    () => api.request('/api/extension/outbox/queue', z.unknown()),
+    { readOnlyHint: true },
+  );
+  tool(
+    server,
+    'whatsapp_get_send_status',
+    'Read the status of one extension send request by outbox ID, including its queue position. Read-only; does not require the extension send opt-in. Never retry UNKNOWN automatically.',
+    UuidInput.shape,
+    (i) => api.request(`/api/extension/outbox/${i.id}`, z.unknown()),
+    { readOnlyHint: true },
   );
   tool(
     server,

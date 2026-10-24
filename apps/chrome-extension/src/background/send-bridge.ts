@@ -22,7 +22,7 @@ const ContextSchema = z.object({
 type Context = z.infer<typeof ContextSchema>;
 type Port = { postMessage(value: unknown): void };
 type Active = { tabId: number; command: ExtensionSendCommand; identity: ConversationIdentity };
-const terminal = new Set(['SENT', 'FAILED', 'CANCELLED', 'UNKNOWN']);
+const terminal = new Set(['SENT', 'FAILED', 'CANCELLED', 'UNKNOWN', 'DRAFTED']);
 function bounded<T>(operation: Promise<T>, ms = 1500): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('CONTENT_UNREACHABLE')), ms);
@@ -104,6 +104,19 @@ export class ExtensionSendBridge {
       build: extensionBuild,
     });
   }
+  // A timeout is not proof of loss (the page may be busy executing): only a hard
+  // failure or an explicit "no such job" reply from the content script drops it.
+  private async jobLost(active: Active, enabled: boolean): Promise<boolean> {
+    try {
+      const reply: unknown = await bounded(
+        this.tabs.sendMessage(active.tabId, { kind: 'SEND_CONTEXT', enabled }),
+      );
+      const executing = (reply as { executing?: string | null } | undefined)?.executing;
+      return executing !== undefined && executing !== active.command.id;
+    } catch (error) {
+      return !(error instanceof Error && error.message === 'CONTENT_UNREACHABLE');
+    }
+  }
   private async report(reason: z.infer<typeof SendBridgeReasonSchema>): Promise<void> {
     this.logReason(reason);
     await this.rpc('SEND_POLL', {
@@ -123,11 +136,20 @@ export class ExtensionSendBridge {
         (await this.storage.get('waiExtensionSendsEnabled')).waiExtensionSendsEnabled === true;
       const instance = await this.instanceId();
       const active = this.active;
-      if (active) {
-        if (!enabled)
-          void bounded(
-            this.tabs.sendMessage(active.tabId, { kind: 'SEND_CONTEXT', enabled: false }),
-          ).catch(() => undefined);
+      if (active && (await this.jobLost(active, enabled))) {
+        // The page job is gone (reload/closed tab): drop it locally so the next
+        // poll omits activeCommand and the API requeues the interrupted request.
+        this.active = undefined;
+        emitFlow(this.logs, {
+          traceId: active.command.traceId ?? active.command.id,
+          resourceId: active.command.id,
+          component: 'EXTENSION_BACKGROUND',
+          phase: 'FAILED',
+          outcome: 'UNKNOWN',
+          code: 'CONTENT_UNREACHABLE',
+          build: extensionBuild,
+        });
+      } else if (active) {
         const result = ExtensionSendPollResultSchema.parse(
           await this.rpc('SEND_POLL', {
             extensionInstanceId: instance,

@@ -15,9 +15,9 @@ it('registers a visible reference with sends disabled and never claims a send',(
     expect(refs.resolve({...identity,contextId:randomUUID()},'Synthetic group',identity.confirmedAt)).toEqual(first);
     expect(refs.resolve({...identity,conversationKey:randomUUID()},'Synthetic group',identity.confirmedAt).conversationId).not.toBe(first.conversationId);
     const pending=repo.create({conversationId:first.conversationId,text:'Synthetic unsent reply',mode:'AUTO',explicitAuthorization:true},'synthetic-autocontext-00001');
-    expect(pending.status).toBe('REQUESTED');
+    expect(pending.status).toBe('QUEUED');
     expect(repo.poll({extensionInstanceId:instance,identity,allowClaim:false})).toEqual({command:null});
-    expect(db.prepare('SELECT status FROM wa_outbox').get()).toEqual({status:'REQUESTED'});
+    expect(db.prepare('SELECT status FROM wa_outbox').get()).toEqual({status:'QUEUED'});
     expect(db.pragma('foreign_key_check')).toEqual([]);
   } finally {db.close();}
 });

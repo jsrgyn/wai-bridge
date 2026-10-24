@@ -64,22 +64,10 @@ export class PhoneSearch {
         throw new Error('SEARCH_CHANGED');
     };
     gate();
-    if (
-      [
-        ...this.doc.querySelectorAll(
-          '[data-testid="new-chat-drawer"],[data-testid="dialer-pad-drawer"]',
-        ),
-      ].some(isVisible)
-    )
-      throw new Error('SEARCH_PANEL_BUSY');
     if (this.identity.current()?.accountId !== accountId)
       throw new Error('RECIPIENT_ACCOUNT_MISMATCH');
-    if (
-      [...this.doc.querySelectorAll('#main footer [contenteditable="true"]')].some((e) =>
-        e.textContent?.trim(),
-      )
-    )
-      throw new Error('COMPOSER_HAS_DRAFT');
+    // Leftover search text or an open new-chat drawer is normalized, not a failure.
+    await this.normalizeSearch();
     const openRoot = this.doc.querySelector<HTMLElement>('#main');
     const openLabel = openRoot
       ?.querySelector('[data-testid="conversation-info-header-chat-title"]')
@@ -98,7 +86,7 @@ export class PhoneSearch {
       ].filter(isVisible);
     let inputs = searchInputs();
     if (inputs.length !== 1) throw new Error('SEARCH_CONTROL_UNAVAILABLE');
-    if (inputs[0]!.value.trim()) throw new Error('SEARCH_HAS_INPUT');
+    if (inputs[0]!.value.trim()) throw new Error('SEARCH_CHANGED');
     this.doc.addEventListener('pointerdown', this.interrupt, true);
     this.doc.addEventListener('keydown', this.interrupt, true);
     this.doc.addEventListener('input', this.interrupt, true);
@@ -136,7 +124,7 @@ export class PhoneSearch {
         ].filter(isVisible);
         return fields.length === 1 ? fields[0] : undefined;
       }, check);
-      if (input.value.trim()) throw new Error('SEARCH_HAS_INPUT');
+      if (input.value.trim()) this.setField(input, '');
       this.input = input;
       this.write(phone);
       candidate = await this.findCandidate('[data-testid="new-chat-drawer"]', check);
@@ -215,6 +203,8 @@ export class PhoneSearch {
     check();
     const current = this.identity.current();
     if (!current || current.accountId !== accountId) throw new Error('RECIPIENT_ACCOUNT_MISMATCH');
+    // Search box empty and drawers closed; the target chat stays open.
+    await this.resetAfterVerify();
     if (
       this.doc.querySelector('#main') !== root ||
       root
@@ -424,15 +414,65 @@ export class PhoneSearch {
     if (!updated) throw new Error('SEARCH_RESULTS_NOT_READY');
     return undefined;
   }
-  release(signal: AbortSignal): void {
+  /** Cleans the sidebar search, closes the new-chat and profile drawers. Idempotent. */
+  async normalize(): Promise<void> {
     this.removeListeners();
-    if (
-      !this.interrupted &&
-      !signal.aborted &&
-      this.input?.isConnected &&
-      this.input.value === this.phone
-    )
-      this.write('');
+    await this.normalizeSearch();
+    if (this.interrupted) return;
+    if (this.visibleProfileDrawers().length) await this.closeProfile(() => {});
+  }
+  /** Normalizes right after verification while the target chat remains open. */
+  async resetAfterVerify(): Promise<void> {
+    await this.normalize();
+  }
+  /** Best-effort cleanup used in finally blocks; never throws. */
+  async release(signal?: AbortSignal): Promise<void> {
+    void signal; // Kept for caller compatibility; cleanup ignores cancellation.
+    try {
+      await this.normalize();
+    } catch {
+      /* Cleanup never changes the execution outcome. */
+    }
+  }
+  private visibleProfileDrawers(): HTMLElement[] {
+    return [...this.doc.querySelectorAll<HTMLElement>('[data-testid="chat-info-drawer"]')].filter(
+      isVisible,
+    );
+  }
+  private async normalizeSearch(): Promise<void> {
+    // Never touch what the user typed or opened during this execution.
+    if (this.interrupted) return;
+    const drawerSelector = '[data-testid="new-chat-drawer"],[data-testid="dialer-pad-drawer"]';
+    const drawers = [...this.doc.querySelectorAll<HTMLElement>(drawerSelector)].filter(isVisible);
+    for (const drawer of drawers) {
+      for (const field of drawer.querySelectorAll<HTMLInputElement>('input'))
+        if (field.value) this.setField(field, '');
+      const controls = [
+        ...drawer.querySelectorAll<HTMLElement>(
+          'button[aria-label="Voltar"],button[aria-label="Back"],[role="button"][aria-label="Voltar"],[role="button"][aria-label="Back"],button[aria-label="Fechar"],button[aria-label="Close"],[role="button"][aria-label="Fechar"],[role="button"][aria-label="Close"]',
+        ),
+      ].filter(isVisible);
+      if (
+        controls.length !== 1 ||
+        controls[0]!.getAttribute('aria-disabled') === 'true' ||
+        (controls[0] instanceof HTMLButtonElement && controls[0].disabled)
+      )
+        throw new Error('NEW_CHAT_CLOSE_UNAVAILABLE');
+      controls[0]!.click();
+    }
+    if (drawers.length)
+      await this.until(
+        () => ([...this.doc.querySelectorAll(drawerSelector)].some(isVisible) ? undefined : true),
+        () => {},
+        'NEW_CHAT_CLOSE_UNAVAILABLE',
+      );
+    const inputs = [
+      ...this.doc.querySelectorAll<HTMLInputElement>(
+        'input[aria-label="Pesquisar ou começar uma nova conversa"],input[aria-label="Search or start a new chat"]',
+      ),
+    ].filter(isVisible);
+    if (inputs.length === 1 && inputs[0]!.value) this.setField(inputs[0]!, '');
+    this.input = undefined;
   }
   private removeListeners(): void {
     for (const event of ['pointerdown', 'keydown', 'input'])
@@ -441,10 +481,13 @@ export class PhoneSearch {
   private write(value: string): void {
     if (!this.input) return;
     this.phone = value;
+    this.setField(this.input, value);
+  }
+  private setField(field: HTMLInputElement, value: string): void {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     if (!setter) throw new Error('SEARCH_CONTROL_UNAVAILABLE');
-    setter.call(this.input, value);
-    this.input.dispatchEvent(new Event('input', { bubbles: true }));
+    setter.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
   }
   private async until<T>(
     read: () => T | undefined,

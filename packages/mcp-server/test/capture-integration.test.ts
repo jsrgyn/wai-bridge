@@ -80,7 +80,12 @@ async function setup(allowExtensionSends=false,enableFlowLogs=false) {
     const content = result.content as { type: string; text: string }[];
     return JSON.parse(content[0]!.text);
   }
-  return { db, app, capture, tool,api };
+  async function call(name: string, args: Record<string, unknown> = {}) {
+    const result = await client.callTool({ name, arguments: args });
+    const content = result.content as { type: string; text: string }[];
+    return { isError: result.isError === true, text: content[0]!.text };
+  }
+  return { db, app, capture, tool, call, api };
 }
 
 describe('capture normalization through API and MCP', () => {
@@ -524,7 +529,7 @@ it('accepts a direct-number MCP intent without an existing recipient conversatio
   const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,confirmedAt:new Date().toISOString()};
   expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,allowClaim:true}})).statusCode).toBe(200);
   const created=await tool('whatsapp_send_to_number',{phoneNumber:'+1 (202) 555-0199',text:'Synthetic direct-number message',mode:'AUTO',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-direct-number'});
-  expect(created).toMatchObject({status:'REQUESTED',inserted:true});
+  expect(created).toMatchObject({status:'QUEUED',inserted:true});
   expect(db.prepare('SELECT count(*) n FROM wa_conversations').get()).toEqual({n:1});
   const status=await tool('whatsapp_get_outbox_status',{id:created.id});
   expect(JSON.parse(status.command.payload_json)).toMatchObject({recipientPhone:'+12025550199',locateByPhone:true,target:{accountId:identity.accountId}});
@@ -536,7 +541,7 @@ it('resolves a named MCP request through SQLite and persists only a phone-search
   expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,conversationLabel:'Synthetic Esposa',allowClaim:true,ready:false}})).statusCode).toBe(200);
   const created=await tool('whatsapp_send_to_contact',{recipientName:'esposa',text:'Synthetic named request',mode:'SUPERVISED',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-named-contact'});
   const status=await tool('whatsapp_get_outbox_status',{id:created.id});
-  expect(status.command.status).toBe('REQUESTED');
+  expect(status.command.status).toBe('QUEUED');
   expect(JSON.parse(status.command.payload_json)).toMatchObject({recipientPhone:'+12025550199',locateByPhone:true,nameRequest:{recipientName:'esposa'}});
 });
 
@@ -545,7 +550,7 @@ it('correlates MCP/API/SQLite sends and capture reads without retaining private 
  const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,phone:'+12025550199',confirmedAt:new Date().toISOString()};
  await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,conversationLabel:'SYNTHETIC_PRIVATE_NAME'}});
  const created=await tool('whatsapp_send_to_number',{phoneNumber:identity.phone,text:'SYNTHETIC_PRIVATE_TEXT',mode:'SUPERVISED',explicitAuthorization:true,idempotencyKey:'synthetic-flow-command-key'});await api.flushLogs();
- const logs=await tool('whatsapp_get_flow_logs',{resourceId:created.id});expect(logs.commandStatus).toBe('REQUESTED');expect(logs.resolvedTraceId).toBe(created.traceId);expect(new Set(logs.items.map((e:{component:string})=>e.component))).toEqual(new Set(['MCP','API','SQLITE']));
+ const logs=await tool('whatsapp_get_flow_logs',{resourceId:created.id});expect(logs.commandStatus).toBe('QUEUED');expect(logs.resolvedTraceId).toBe(created.traceId);expect(new Set(logs.items.map((e:{component:string})=>e.component))).toEqual(new Set(['MCP','API','SQLITE']));
  const text=JSON.stringify(logs);for(const secret of ['SYNTHETIC_PRIVATE_TEXT','SYNTHETIC_PRIVATE_NAME',identity.phone,token])expect(text).not.toContain(secret);
  const value=observation({identity,conversation:{label:'SYNTHETIC_PRIVATE_NAME',kind:'INDIVIDUAL'},content:'SYNTHETIC_PRIVATE_CAPTURE',media:[],observedAt:new Date(Date.now()+1000).toISOString()});expect((await capture(value)).statusCode).toBe(202);
  await tool('whatsapp_get_messages');await api.flushLogs();const captureLogs=await tool('whatsapp_get_flow_logs',{resourceId:value.observationId});expect(captureLogs.items).toContainEqual(expect.objectContaining({component:'MCP',phase:'CAPTURE_READ'}));expect(JSON.stringify(captureLogs)).not.toContain(value.content!);
@@ -611,4 +616,28 @@ it('promotes a direction-unknown shell to one available message after later DOM 
  expect((await capture(hydrated)).statusCode).toBe(202);
  const conversationId=(db.prepare('SELECT id FROM wa_conversations').get() as {id:string}).id;
  const dialogue=await tool('whatsapp_get_dialogue',{conversationId,limit:20});expect(dialogue.messages).toHaveLength(1);expect(dialogue.messages[0]).toMatchObject({direction:'OUTBOUND',content:hydrated.content,sequence:1});
+});
+
+it('forwards timing on send tools and serves the queue without the send opt-in',async()=>{
+  const {app,tool}=await setup(true);
+  const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'INDIVIDUAL' as const,phone:'+550000000022',confirmedAt:new Date().toISOString()};
+  expect((await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers:{authorization:`Bearer ${token}`},payload:{extensionInstanceId,identity,conversationLabel:'Synthetic Esposa',allowClaim:true}})).statusCode).toBe(200);
+  const number=await tool('whatsapp_send_to_number',{phoneNumber:'+550000000021',text:'Synthetic timing message',mode:'AUTO',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-timing-0001',timing:{autoCountdownMs:0}});
+  const contact=await tool('whatsapp_send_to_contact',{recipientName:'esposa',text:'Synthetic timing contact',mode:'AUTO',explicitAuthorization:true,idempotencyKey:'synthetic-sdk-timing-0002',timing:{autoCountdownMs:1000}});
+  const timingOf=async(id:string)=>JSON.parse((await tool('whatsapp_get_outbox_status',{id})).command.payload_json).timing;
+  expect(await timingOf(number.id)).toMatchObject({autoCountdownMs:0});
+  expect(await timingOf(contact.id)).toMatchObject({autoCountdownMs:1000});
+  const queue=await tool('whatsapp_get_send_queue');
+  expect(queue.items.map((x:{id:string})=>x.id)).toEqual(expect.arrayContaining([number.id,contact.id]));
+  expect(await tool('whatsapp_get_send_status',{id:number.id})).toMatchObject({id:number.id,priority:1});
+});
+
+it('serves the queue without the opt-in and reports a specific not-found for unknown status',async()=>{
+  const {call}=await setup(false);
+  const queue=await call('whatsapp_get_send_queue');
+  expect(queue.isError).toBe(false);
+  expect(JSON.parse(queue.text)).toMatchObject({paused:false,items:[]});
+  const missing=await call('whatsapp_get_send_status',{id:randomUUID()});
+  expect(missing.isError).toBe(true);
+  expect(missing.text).toMatch(/404|NOT_FOUND|not found/i);
 });

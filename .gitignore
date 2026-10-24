@@ -113,3 +113,6 @@ apps/mac-agent/test/**/*.js
 apps/mac-agent/test/**/*.js.map
 apps/mac-agent/test/**/*.d.ts
 apps/mac-agent/test/**/*.d.ts.map
+
+# Claude Code / Superpowers worktrees (settings.local.json já coberto por *.local.json)
+.worktrees/
