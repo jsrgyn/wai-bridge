@@ -73,9 +73,9 @@ describe('SQLite database engine', () => {
     const { db } = fixture();
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 16 });
+    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 17 });
     applyMigrations(db);
-    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 16 });
+    expect(db.prepare('SELECT count(*) n FROM wa_schema_migrations').get()).toEqual({ n: 17 });
     db.close();
   });
   it('inserts, queries recent messages and deduplicates idempotently', () => {

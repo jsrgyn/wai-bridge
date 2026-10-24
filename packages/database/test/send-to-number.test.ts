@@ -39,7 +39,7 @@ it('persists a request to a new phone without fabricating a verified contact or 
     repo.poll({ extensionInstanceId, identity });
     const before = db.prepare('SELECT count(*) n FROM wa_conversation_identities').get();
     const created = repo.createToNumber(request, 'synthetic-direct-number-key');
-    expect(created.status).toBe('REQUESTED');
+    expect(created.status).toBe('QUEUED');
     expect(db.prepare('SELECT count(*) n FROM wa_conversation_identities').get()).toEqual(before);
     expect(
       db.prepare('SELECT count(*) n FROM wa_contacts WHERE phone_number IS NOT NULL').get(),
@@ -101,7 +101,7 @@ it('requires one fresh opted-in account and never guesses international prefixes
         { ...request, accountId: identity.accountId },
         'synthetic-explicit-account',
       ).status,
-    ).toBe('REQUESTED');
+    ).toBe('QUEUED');
     expect(() =>
       repo.createToNumber(
         { ...request, accountId: randomUUID() },
@@ -247,7 +247,7 @@ it('advertises a hidden pending intent and supervises cancellation using the ori
       bridge: 'TAB_HIDDEN',
       protocolVersion: 2,
       ready: false,
-      queue: [{ status: 'REQUESTED', count: 1 }],
+      queue: [{ status: 'WAITING_WHATSAPP', count: 1 }],
     });
     const command = repo.poll({ extensionInstanceId, identity, ready: true }).command!;
     const activeCommand = {

@@ -59,7 +59,7 @@ export class VisibleDialogueSync {
         try {
           return (await search.resolve(phone, job.accountId, controller.signal, check)).root;
         } finally {
-          search.release(controller.signal);
+          await search.release(controller.signal);
         }
       }
       const label = () =>

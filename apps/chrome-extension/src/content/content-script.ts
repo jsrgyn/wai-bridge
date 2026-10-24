@@ -231,6 +231,7 @@ const onMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
       ok: true,
       ready: monitoring && !document.hidden,
       build: extensionBuild,
+      executing: executingId ?? null,
       compatibility:uiCompatibility(document),
       ...(identity
         ? {

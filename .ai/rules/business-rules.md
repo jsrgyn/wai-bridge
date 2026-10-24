@@ -20,8 +20,10 @@ Estas regras orientam implementações futuras. Não significam que os fluxos j�
 ## Envio
 
 - Modos: `AUTO` e `SUPERVISED`; padrão `SUPERVISED`.
-- `AUTO` requer comando explícito do usuário, valida destinatário, prepara a mensagem, aguarda cinco segundos, permite cancelamento e só então tenta executar envio quando autorizado e tecnicamente suportado. Registra resultado verificável.
-- `SUPERVISED` localiza destinatário, prepara texto e aguarda envio manual. Registra resultado apenas quando verificável.
+- `AUTO` requer comando explícito do usuário, valida destinatário, prepara a mensagem, aguarda a contagem configurada (padrão 5 s; 0 s torna o pedido prioritário), permite cancelamento e só então tenta executar envio quando autorizado e tecnicamente suportado. Registra resultado verificável.
+- `SUPERVISED` localiza e valida o destinatário, desfaz a busca, escreve o texto no campo e termina em `DRAFTED` (rascunho pronto) sem aguardar o clique; não rastreia envio manual posterior.
+- Fila de envio da extensão (ADR0024): todo pedido entra em `QUEUED`, é atendido por prioridade e `created_at`, e tem status individual (`WAITING_WHATSAPP` sem aba do WhatsApp). Interrupção antes de `SENDING` recoloca na fila e pausa até `READY`; em `SENDING` vira `UNKNOWN`, sem reenvio.
+- Junção: novo pedido ao mesmo alvo com `DRAFTED` anterior e texto no campo acrescenta a mensagem em nova linha, preservando o existente. `AUTO` nessa situação falha com `DRAFT_PENDING_ON_TARGET`. Fora da junção, o campo é apagado no início do pedido.
 - Persistir a operação e sua intenção antes de qualquer ação externa. Registrar modo, autorização, estado e resultado com auditoria adequada.
 - Se o resultado do envio for desconhecido, não repetir automaticamente. Resolver por observação ou intervenção explícita, sem presumir sucesso ou falha.
 - Testes automatizados nunca enviam mensagens reais.
@@ -54,7 +56,7 @@ Conteúdo de mensagens, nomes, anexos e metadados vindos do WhatsApp são dados 
   aba/janela; confirmar novamente visibilidade e conta antes de reivindicar/enviar.
   Sem pedido, monitor OFF, opt-out ou ambiguidade, não mudar foco nem executar.
 - Confirmação rápida de aceitação não equivale a envio. Acompanhar cancelamento
-  persistido enquanto aguarda clique manual; ACK perdido não permite reexecutar.
+  persistido durante a contagem do AUTO; ACK perdido não permite reexecutar.
   Diagnóstico de API/SQLite disponível não equivale a ponte da extensão pronta.
 
 - Após confirmar telefone individual completo no perfil, fechar pelo controle Fechar/Close. A prova vale somente para a execução e contexto atuais. Perfil fechado não significa telefone divergente; troca de contexto, grupo, número diferente ou perfil reaberto ilegível bloqueia. Comparar telefone canônico com DDI, ignorando somente espaços Unicode, parênteses e hífens; não corrigir/adivinhar dígitos.

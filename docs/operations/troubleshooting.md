@@ -50,11 +50,15 @@ CONTENT_OUTDATED pede recarga da extensão e depois da aba. CONTENT_UNREACHABLE 
 verificar a aba/script. NO_MONITORED_CONTEXT pede monitor ON e uma conversa aberta
 (após reload o WhatsApp pode voltar sem #main). AMBIGUOUS_TABS pede deixar somente
 uma aba compatível para o pedido. SEND_DISABLED pede opt-in. READY com ready=true
-e lastPollAt recente confirma contexto vivo. EXECUTING com WAITING_USER na fila é
-espera do clique manual, não falha de resposta.
+e lastPollAt recente confirma contexto vivo. Pedidos antigos em WAITING_USER aparecem
+como COMPOSED; o fluxo atual não espera clique manual (SUPERVISED termina em DRAFTED).
 
-Outbox REQUESTED com attempt_count=0 até REQUEST_EXPIRED não chegou ao executor;
-consultar esse estado é diferente de tentar enviar novamente. Não repetir UNKNOWN.
-Nova ponte responde aceitação sem segurar o canal pela espera manual, continua
+Pedido QUEUED/WAITING_WHATSAPP com attempt_count=0 até REQUEST_EXPIRED (tempo
+máximo de espera configurado) não chegou ao executor; consultar esse estado é
+diferente de tentar enviar novamente. Fila pausada com INTERRUPTED volta no próximo
+poll READY; o pedido interrompido antes de SENDING é retomado na mesma posição.
+DRAFT_PENDING_ON_TARGET: AUTO encontrou rascunho pendente no campo do contato;
+envie ou apague o rascunho e peça de novo. Não repetir UNKNOWN.
+Nova ponte responde aceitação sem segurar o canal, continua
 consultando cancelamento e não depende de a aba WhatsApp já estar selecionada.
 Não usar automação externa da IA para contornar a extensão.

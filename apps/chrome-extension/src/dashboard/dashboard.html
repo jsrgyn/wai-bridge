@@ -108,6 +108,45 @@
         <button id="report-next" disabled>Próxima página do relatório</button>
       </section>
       <section>
+        <h2>Envios</h2>
+        <p>
+          Tempos dos envios pelo WhatsApp Web. Os valores ficam no WAI Bridge local e valem para os
+          próximos envios.
+        </p>
+        <form id="send-timing" novalidate>
+          <label
+            >Contagem antes do envio automático (segundos)
+            <input name="autoCountdownS" type="number" min="0" max="30" step="any" /><small
+              class="field-error"
+              data-error-for="autoCountdownS"
+            ></small></label
+          ><label
+            >Tempo limite de execução (segundos)
+            <input name="executionTimeoutS" type="number" min="20" max="180" step="any" /><small
+              class="field-error"
+              data-error-for="executionTimeoutS"
+            ></small></label
+          ><label
+            >Espera máxima na fila (minutos)
+            <input name="queueMaxWaitMin" type="number" min="1" max="1440" step="any" /><small
+              class="field-error"
+              data-error-for="queueMaxWaitMin"
+            ></small></label
+          ><label><input name="queueUnlimited" type="checkbox" />Sem limite de espera na fila</label
+          ><label
+            >Conferência após o envio (segundos)
+            <input name="sendVerifyS" type="number" min="5" max="60" step="any" /><small
+              class="field-error"
+              data-error-for="sendVerifyS"
+            ></small></label
+          ><button>Salvar tempos</button
+          ><button id="send-timing-reset" type="button">Restaurar padrão</button>
+        </form>
+        <h3>Fila de envios</h3>
+        <p id="send-paused" class="banner" hidden></p>
+        <div id="send-queue"></div>
+      </section>
+      <section>
         <h2>Backup e manutenção</h2>
         <p>
           Backups têm validação de integridade e de uma cópia restaurada. Restauração do banco em

@@ -16,7 +16,7 @@ declare global {
     };
   }
 }
-test('content acknowledges acceptance immediately and aborts a supervised wait on cancellation without sending', async ({
+test('content acknowledges acceptance immediately and finishes a supervised draft as DRAFTED without sending', async ({
   page,
 }) => {
   await page.route('https://protocol.test/**', (route) =>
@@ -84,6 +84,13 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
           mode: 'SUPERVISED',
           explicitAuthorization: true,
           leaseUntil: new Date(Date.now() + 180000).toISOString(),
+          timing: {
+            autoCountdownMs: 5000,
+            executionTimeoutMs: 60000,
+            queueMaxWaitMs: 1800000,
+            sendVerifyMs: 15000,
+          },
+          appendToDraft: false,
         },
       },
       sender,
@@ -94,17 +101,9 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
   expect(await page.evaluate(() => window.protocolCase.replies)).toEqual([
     { ok: true, accepted: true },
   ]);
-  await expect.poll(() => page.evaluate(() => window.protocolCase.steps)).toEqual(['WAITING_USER']);
-  await page.evaluate(
-    (id) =>
-      window.protocolCase.listener(
-        { kind: 'SEND_CANCEL', commandId: id },
-        { id: 'wrong-extension' },
-        () => {},
-      ),
-    id,
-  );
-  expect(await page.evaluate(() => window.protocolCase.steps)).toEqual(['WAITING_USER']);
+  await expect.poll(() => page.evaluate(() => window.protocolCase.steps)).toEqual(['DRAFTED']);
+  await expect(page.getByRole('textbox')).toHaveText('Synthetic supervised draft');
+  // A late cancellation after the terminal draft must not change anything.
   await page.evaluate(
     (id) =>
       window.protocolCase.listener(
@@ -114,13 +113,11 @@ test('content acknowledges acceptance immediately and aborts a supervised wait o
       ),
     id,
   );
-  await expect
-    .poll(() => page.evaluate(() => window.protocolCase.steps))
-    .toEqual(['WAITING_USER', 'CANCELLED']);
+  expect(await page.evaluate(() => window.protocolCase.steps)).toEqual(['DRAFTED']);
   expect(await page.evaluate(() => window.protocolCase.clicks)).toBe(0);
   const logs = await page.evaluate(() => window.protocolCase.logs);
   expect(logs).toContainEqual(
-    expect.objectContaining({ resourceId: id, traceId: id, phase: 'CANCELLED' }),
+    expect.objectContaining({ resourceId: id, traceId: id, phase: 'DRAFTED' }),
   );
   expect(logs).toContainEqual(
     expect.objectContaining({ resourceId: id, phase: 'MESSAGE_COMPOSED' }),

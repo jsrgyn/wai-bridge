@@ -153,8 +153,9 @@ it('continues durable command transitions when diagnostic persistence fails', ()
       {
         conversationId: conversation,
         text: 'Synthetic diagnostic failure',
-        mode: 'SUPERVISED',
+        mode: 'AUTO',
         explicitAuthorization: true,
+        timing: { autoCountdownMs: 0 },
       },
       'synthetic-log-failure-key',
     );
@@ -167,7 +168,7 @@ it('continues durable command transitions when diagnostic persistence fails', ()
       contextId: command.contextId,
       code: 'SYNTHETIC_STEP',
     };
-    expect(repo.progress({ ...base, step: 'WAITING_USER' }).status).toBe('WAITING_USER');
+    expect(repo.progress({ ...base, step: 'WAITING_AUTO_SEND' }).status).toBe('WAITING_AUTO_SEND');
     expect(repo.progress({ ...base, step: 'SENDING' }).status).toBe('SENDING');
   } finally {
     db.close();

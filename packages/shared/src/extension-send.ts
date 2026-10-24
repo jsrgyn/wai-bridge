@@ -24,6 +24,33 @@ export function sendTarget(identity: ConversationIdentity): z.infer<typeof SendT
           : identity.groupId,
   };
 }
+export const SendTimingSchema = z
+  .object({
+    autoCountdownMs: z.number().int().min(0).max(30_000),
+    executionTimeoutMs: z.number().int().min(20_000).max(180_000),
+    queueMaxWaitMs: z.number().int().min(60_000).max(86_400_000).nullable(),
+    sendVerifyMs: z.number().int().min(5_000).max(60_000),
+  })
+  .strict();
+export type SendTiming = z.infer<typeof SendTimingSchema>;
+export const DEFAULT_SEND_TIMING: SendTiming = {
+  autoCountdownMs: 5_000,
+  executionTimeoutMs: 60_000,
+  queueMaxWaitMs: 1_800_000,
+  sendVerifyMs: 15_000,
+};
+export const SendTimingOverrideSchema = SendTimingSchema.partial();
+export type SendTimingOverride = z.infer<typeof SendTimingOverrideSchema>;
+export function resolveSendTiming(settings: SendTiming, override?: SendTimingOverride): SendTiming {
+  const merged: SendTiming = { ...settings };
+  if (override) {
+    for (const key of Object.keys(override) as (keyof SendTiming)[]) {
+      const value = override[key];
+      if (value !== undefined) (merged as Record<string, number | null>)[key] = value;
+    }
+  }
+  return merged;
+}
 export const ExtensionSendRequestSchema = z
   .object({
     conversationId: z.uuid(),
@@ -31,6 +58,7 @@ export const ExtensionSendRequestSchema = z
     mode: z.enum(['AUTO', 'SUPERVISED']).default('SUPERVISED'),
     explicitAuthorization: z.literal(true),
     locateByPhone: z.boolean().optional(),
+    timing: SendTimingOverrideSchema.optional(),
   })
   .strict();
 export const ExtensionPhoneSendRequestSchema = z
@@ -48,6 +76,7 @@ export const ExtensionPhoneSendRequestSchema = z
     text: z.string().trim().min(1).max(10_000),
     mode: z.enum(['AUTO', 'SUPERVISED']).default('SUPERVISED'),
     explicitAuthorization: z.literal(true),
+    timing: SendTimingOverrideSchema.optional(),
   })
   .strict();
 export const ExtensionRecipientSendRequestSchema = ExtensionPhoneSendRequestSchema.omit({
@@ -88,7 +117,7 @@ export const ExtensionSendPollSchema = z
 export const ExtensionSendCommandSchema = z
   .object({
     id: z.uuid(),
-    traceId:z.uuid().optional(),
+    traceId: z.uuid().optional(),
     leaseToken: z.uuid(),
     contextId: z.uuid(),
     conversationId: z.uuid().optional(),
@@ -102,6 +131,8 @@ export const ExtensionSendCommandSchema = z
     mode: z.enum(['AUTO', 'SUPERVISED']),
     explicitAuthorization: z.literal(true),
     leaseUntil: z.iso.datetime(),
+    timing: SendTimingSchema,
+    appendToDraft: z.boolean(),
   })
   .strict()
   .refine(
@@ -116,6 +147,21 @@ export const ExtensionSendStepSchema = z.enum([
   'WAITING_AUTO_SEND',
   'WAITING_USER',
   'SENDING',
+  'DRAFTED',
+  'SENT',
+  'UNKNOWN',
+  'FAILED',
+  'CANCELLED',
+]);
+export const ExtensionSendQueueStatusSchema = z.enum([
+  'QUEUED',
+  'WAITING_WHATSAPP',
+  'CLAIMED',
+  'TARGET_VERIFIED',
+  'COMPOSED',
+  'WAITING_AUTO_SEND',
+  'SENDING',
+  'DRAFTED',
   'SENT',
   'UNKNOWN',
   'FAILED',
@@ -125,7 +171,7 @@ export const ExtensionSendProgressSchema = z
   .object({
     extensionInstanceId: z.uuid(),
     commandId: z.uuid(),
-    traceId:z.uuid().optional(),
+    traceId: z.uuid().optional(),
     leaseToken: z.uuid(),
     contextId: z.uuid(),
     step: ExtensionSendStepSchema,
@@ -146,18 +192,8 @@ export const ExtensionSendPollResultSchema = z
   .object({
     command: ExtensionSendCommandSchema.nullable(),
     pending: z.boolean().optional(),
-    activeStatus: z
-      .enum([
-        'REQUESTED',
-        'CLAIMED',
-        'WAITING_USER',
-        'WAITING_AUTO_SEND',
-        'SENDING',
-        'SENT',
-        'UNKNOWN',
-        'FAILED',
-        'CANCELLED',
-      ])
+    activeStatus: ExtensionSendQueueStatusSchema.or(z.literal('REQUESTED'))
+      .or(z.literal('WAITING_USER'))
       .optional(),
   })
   .strict();
@@ -166,3 +202,25 @@ export const ExtensionSendProgressResultSchema = z
   .strict();
 export type ExtensionSendCommand = z.infer<typeof ExtensionSendCommandSchema>;
 export type ExtensionSendProgress = z.infer<typeof ExtensionSendProgressSchema>;
+export const ExtensionSendQueueItemSchema = z
+  .object({
+    id: z.uuid(),
+    status: ExtensionSendQueueStatusSchema,
+    mode: z.enum(['AUTO', 'SUPERVISED']),
+    priority: z.union([z.literal(0), z.literal(1)]),
+    position: z.number().int().nullable(),
+    attempts: z.number().int(),
+    resultCode: z.string().nullable(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export const ExtensionSendQueueSchema = z
+  .object({
+    paused: z.boolean(),
+    pauseReason: z.string().nullable(),
+    items: z.array(ExtensionSendQueueItemSchema),
+  })
+  .strict();
+export type ExtensionSendQueueItem = z.infer<typeof ExtensionSendQueueItemSchema>;
+export type ExtensionSendQueue = z.infer<typeof ExtensionSendQueueSchema>;
