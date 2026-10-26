@@ -5,6 +5,9 @@ import {
   SendTimingSchema,
   ExtensionSendQueueSchema,
   DEFAULT_SEND_TIMING,
+  SEARCH_DIAGNOSTICS_KEY,
+  SearchDiagnosticListSchema,
+  SearchStructureReportSchema,
   type SendTiming,
 } from '@wai-bridge/shared';
 import { z } from 'zod';
@@ -532,5 +535,45 @@ function pollQueue() {
 }
 setInterval(pollQueue, 3000);
 document.addEventListener('visibilitychange', pollQueue);
+const SearchDiagnoseReplySchema = z.union([
+  z.object({ ok: z.literal(true), report: SearchStructureReportSchema }).strict(),
+  z.object({ ok: z.literal(false), error: z.string().max(64) }).strict(),
+]);
+async function loadSearchDiagnostics() {
+  const list = element('search-diagnostics-list');
+  list.replaceChildren();
+  let entries: z.infer<typeof SearchDiagnosticListSchema> = [];
+  try {
+    const stored = await chrome.storage.local.get(SEARCH_DIAGNOSTICS_KEY);
+    const parsed = SearchDiagnosticListSchema.safeParse(stored[SEARCH_DIAGNOSTICS_KEY] ?? []);
+    if (parsed.success) entries = parsed.data;
+  } catch {
+    entries = [];
+  }
+  if (!entries.length) {
+    const empty = document.createElement('li');
+    empty.textContent = 'Nenhuma falha de busca registrada.';
+    list.append(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const item = document.createElement('li');
+    const heading = document.createElement('strong');
+    heading.textContent = `${entry.code} · ${entry.recordedAt}`;
+    const body = document.createElement('pre');
+    body.textContent = JSON.stringify(entry.report, null, 2);
+    item.append(heading, body);
+    list.append(item);
+  }
+}
+click('search-diagnose', async () => {
+  const reply = SearchDiagnoseReplySchema.parse(
+    await chrome.runtime.sendMessage({ kind: 'SEARCH_DIAGNOSE' }),
+  );
+  if (!reply.ok) throw new Error(reply.error);
+  show(reply.report, 'search-diagnostics-result');
+  await loadSearchDiagnostics();
+});
+void loadSearchDiagnostics();
 click('refresh', refresh);
 action(refresh)();
