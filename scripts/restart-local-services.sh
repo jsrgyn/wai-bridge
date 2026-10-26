@@ -16,6 +16,7 @@ WAIT_SECONDS=15
 
 usage() {
   echo "Uso: $0 [--check]" >&2
+  echo "Cole somente o comando, sem comentários ou argumentos extras (um '#' no fim vira argumento no zsh sem interactive_comments)." >&2
   exit 2
 }
 
@@ -51,12 +52,27 @@ uri_path() {
   echo "$path"
 }
 
+SCHEMA_READ_SECONDS=20
+
+# Lê a versão do schema, repetindo por até SCHEMA_READ_SECONDS enquanto a leitura falhar
+# (ex.: banco ocupado durante migrações). Só repete em falha de leitura, não em versão errada.
 schema_version() {
   [[ -f "$DB_PATH" ]] || fail "banco não encontrado"
-  local version
-  version="$(sqlite3 "file:$(uri_path "$DB_PATH")?mode=ro" 'SELECT COALESCE(MAX(version), 0) FROM wa_schema_migrations' 2>/dev/null)" ||
-    fail "não foi possível ler a versão do schema"
-  echo "${version:-0}"
+  local version err_file err="" attempt=0 start=$SECONDS
+  err_file="$(mktemp "${TMPDIR:-/tmp}/wai-schema-err.XXXXXX")"
+  while true; do
+    attempt=$((attempt + 1))
+    if version="$(sqlite3 -cmd '.timeout 5000' "file:$(uri_path "$DB_PATH")?mode=ro" 'SELECT COALESCE(MAX(version), 0) FROM wa_schema_migrations' 2>"$err_file")"; then
+      rm -f "$err_file"
+      echo "${version:-0}"
+      return 0
+    fi
+    err="$(head -n 1 "$err_file" 2>/dev/null || true)"
+    if ((attempt >= SCHEMA_READ_SECONDS || SECONDS - start >= SCHEMA_READ_SECONDS)); then break; fi
+    sleep 1
+  done
+  rm -f "$err_file"
+  fail "não foi possível ler a versão do schema (${attempt} tentativas): ${err:-erro desconhecido}"
 }
 
 api_pid() {
