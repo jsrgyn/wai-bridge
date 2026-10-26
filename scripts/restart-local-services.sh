@@ -42,10 +42,19 @@ latest_migration() {
   echo $((10#$latest))
 }
 
+# Percent-encode os caracteres que quebrariam uma URI file: do SQLite (% primeiro).
+uri_path() {
+  local path="$1"
+  path="${path//%/%25}"
+  path="${path//\?/%3F}"
+  path="${path//\#/%23}"
+  echo "$path"
+}
+
 schema_version() {
   [[ -f "$DB_PATH" ]] || fail "banco não encontrado"
   local version
-  version="$(sqlite3 "file:${DB_PATH}?mode=ro" 'SELECT COALESCE(MAX(version), 0) FROM wa_schema_migrations' 2>/dev/null)" ||
+  version="$(sqlite3 "file:$(uri_path "$DB_PATH")?mode=ro" 'SELECT COALESCE(MAX(version), 0) FROM wa_schema_migrations' 2>/dev/null)" ||
     fail "não foi possível ler a versão do schema"
   echo "${version:-0}"
 }
@@ -106,7 +115,7 @@ run_check() {
 }
 
 run_restart() {
-  local latest backup stamp ok pid new_pid="" i age current
+  local latest backup stamp ok q esc pid new_pid="" i age current
   latest="$(latest_migration)"
   [[ -f "$DB_PATH" ]] || fail "banco não encontrado"
 
@@ -117,10 +126,12 @@ run_restart() {
   stamp="$(date +%Y%m%d-%H%M%S)"
   backup="$(dirname "$DB_PATH")/backup-$stamp.sqlite"
   [[ ! -e "$backup" ]] || fail "arquivo de backup já existe: $backup"
-  (umask 077 && sqlite3 "file:${DB_PATH}?mode=ro" "VACUUM INTO '${backup//\'/\'\'}'") ||
+  q="'"
+  esc="${backup//$q/$q$q}"
+  (umask 077 && sqlite3 "file:$(uri_path "$DB_PATH")?mode=ro" "VACUUM INTO '$esc'") ||
     fail "backup falhou; reinício abortado"
   chmod 600 "$backup"
-  ok="$(sqlite3 "file:${backup}?mode=ro" 'PRAGMA integrity_check' 2>/dev/null || true)"
+  ok="$(sqlite3 "file:$(uri_path "$backup")?mode=ro" 'PRAGMA integrity_check' 2>/dev/null || true)"
   [[ "$ok" == "ok" ]] || fail "backup não passou em integrity_check; reinício abortado (backup mantido para análise)"
   echo "backup verificado: $backup"
 

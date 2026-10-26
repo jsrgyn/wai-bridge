@@ -4,6 +4,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -18,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 const REAL_SCRIPT = resolve(__dirname, '../../scripts/restart-local-services.sh');
 
 interface Scenario {
+  dataDir?: string;
   schema: number;
   latest: number;
   pid?: string;
@@ -39,7 +41,8 @@ function setup(s: Scenario): { script: string; env: NodeJS.ProcessEnv; db: strin
   mkdirSync(join(root, 'apps/local-api/dist'), { recursive: true });
   mkdirSync(join(root, 'packages/database/src/migrations'), { recursive: true });
   mkdirSync(join(dir, 'bin'), { recursive: true });
-  mkdirSync(join(dir, 'data'), { recursive: true });
+  const dataDir = join(dir, s.dataDir ?? 'data');
+  mkdirSync(dataDir, { recursive: true });
   const script = join(root, 'scripts/restart-local-services.sh');
   copyFileSync(REAL_SCRIPT, script);
   chmodSync(script, 0o755);
@@ -54,7 +57,7 @@ function setup(s: Scenario): { script: string; env: NodeJS.ProcessEnv; db: strin
   const built = new Date(Date.now() - s.distAgeSeconds * 1000);
   utimesSync(main, built, built);
 
-  const db = join(dir, 'data/synthetic.sqlite');
+  const db = join(dataDir, 'synthetic.sqlite');
   const sqlite = new Database(db);
   sqlite.exec('CREATE TABLE wa_schema_migrations (version INTEGER PRIMARY KEY, name TEXT)');
   for (let n = 1; n <= s.schema; n++) {
@@ -86,7 +89,7 @@ function setup(s: Scenario): { script: string; env: NodeJS.ProcessEnv; db: strin
 function check(s: Scenario) {
   const { script, env, db } = setup(s);
   const before = readFileSync(db);
-  const result = spawnSync(script, ['--check'], { env, encoding: 'utf8' });
+  const result = spawnSync('/bin/bash', [script, '--check'], { env, encoding: 'utf8' });
   expect(readFileSync(db).equals(before)).toBe(true);
   return result;
 }
@@ -132,14 +135,21 @@ describe('restart-local-services.sh --check', () => {
 
   it('rejects unknown arguments without side effects', () => {
     const { script, env } = setup({ schema: 18, latest: 18, pid: '1', distAgeSeconds: 10 });
-    const r = spawnSync(script, ['--bogus'], { env, encoding: 'utf8' });
+    const r = spawnSync('/bin/bash', [script, '--bogus'], { env, encoding: 'utf8' });
     expect(r.status).toBe(2);
   });
 });
 
 describe('restart-local-services.sh (restart mode, stubs only)', () => {
-  function restartSetup(opts: { sqliteFails?: boolean }) {
-    const s = setup({ schema: 18, latest: 18, pid: '100', etime: '00:01', distAgeSeconds: 10 });
+  function restartSetup(opts: { sqliteFails?: boolean; dataDir?: string }) {
+    const s = setup({
+      schema: 18,
+      latest: 18,
+      pid: '100',
+      etime: '00:01',
+      distAgeSeconds: 10,
+      ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
+    });
     const log = join(dir, 'calls.log');
     const pidFile = join(dir, 'pid');
     writeFileSync(pidFile, '100');
@@ -156,7 +166,7 @@ echo "gui/501/x = {"; echo "	pid = $(cat "${pidFile}")"; echo "}"`,
 
   it('creates a verified 600 backup, kickstarts and confirms the schema', () => {
     const { script, env, log } = restartSetup({});
-    const r = spawnSync(script, [], { env, encoding: 'utf8' });
+    const r = spawnSync('/bin/bash', [script], { env, encoding: 'utf8' });
     expect(r.status).toBe(0);
     expect(readFileSync(log, 'utf8')).toBe('build\nkickstart\n');
     const backups = spawnSync('/bin/ls', [join(dir, 'data')], { encoding: 'utf8' }).stdout;
@@ -169,9 +179,25 @@ echo "gui/501/x = {"; echo "	pid = $(cat "${pidFile}")"; echo "}"`,
 
   it('aborts before kickstart when the backup fails', () => {
     const { script, env, log } = restartSetup({ sqliteFails: true });
-    const r = spawnSync(script, [], { env, encoding: 'utf8' });
+    const r = spawnSync('/bin/bash', [script], { env, encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('backup falhou');
     expect(readFileSync(log, 'utf8')).toBe('build\n');
   });
+
+  it.each(["App Support 'quoted'", 'App Support', 'odd#dir', 'odd?dir', 'odd%20dir'])(
+    'handles a data directory named %s (check and backup)',
+    (name) => {
+      const { script, env, log } = restartSetup({ dataDir: name });
+      const c = spawnSync('/bin/bash', [script, '--check'], { env, encoding: 'utf8' });
+      expect(c.stderr).toBe('');
+      expect(c.status).toBe(0);
+      const r = spawnSync('/bin/bash', [script], { env, encoding: 'utf8' });
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(readFileSync(log, 'utf8')).toBe('build\nkickstart\n');
+      const files = readdirSync(join(dir, name)).filter((f) => f.startsWith('backup-'));
+      expect(files).toHaveLength(1);
+    },
+  );
 });
