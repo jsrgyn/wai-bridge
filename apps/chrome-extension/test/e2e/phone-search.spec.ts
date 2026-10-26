@@ -68,6 +68,10 @@ for (const scenario of [
   'profile-change',
   'group',
   'user-interference',
+  'self-row',
+  'self-row-supervised',
+  'self-wrong-phone',
+  'unrecognized',
 ] as const)
   test(`phone search ${scenario} verifies recipient before any synthetic send`, async ({
     page,
@@ -136,6 +140,7 @@ for (const scenario of [
         list.replaceChildren();
         if (
           scenario === 'not-found' ||
+          (scenario === 'unrecognized' && input.closest('[data-testid="new-chat-drawer"]')) ||
           (['directory', 'directory-press', 'directory-drawer-stays'].includes(scenario) &&
             !input.closest('[data-testid="new-chat-drawer"]'))
         )
@@ -147,8 +152,13 @@ for (const scenario of [
             input.closest('[data-testid="new-chat-drawer"]') ? 'button' : 'row',
           );
           if (scenario === 'directory-press') row.tabIndex = 0;
+          const self = scenario.startsWith('self-');
           row.innerHTML =
-            '<div data-testid="cell-frame-container"><span data-testid="cell-frame-title">Synthetic result</span><span aria-selected="false"></span></div>';
+            scenario === 'unrecognized'
+              ? '<div data-testid="synthetic-unknown-frame"><span>Synthetic result</span><span aria-selected="false"></span></div>'
+              : self
+                ? '<div data-testid="message-yourself-row"><span data-testid="cell-frame-title">Synthetic result (você)</span><span aria-selected="false"></span></div>'
+                : '<div data-testid="cell-frame-container"><span data-testid="cell-frame-title">Synthetic result</span><span aria-selected="false"></span></div>';
           const needsGridcell = scenario.startsWith('gridcell');
           if (needsGridcell) {
             const cell = document.createElement('div');
@@ -195,9 +205,9 @@ for (const scenario of [
               state.profileClicks++;
               const drawer = document.createElement('aside');
               drawer.setAttribute('data-testid', 'chat-info-drawer');
-              drawer.innerHTML = `<button aria-label="Fechar">Close synthetic</button><div data-testid="${scenario === 'group' ? 'group-info-header' : 'contact-info-header'}">Info</div><span>Synthetic result</span><span id="resolved-phone"></span>`;
+              drawer.innerHTML = `<button aria-label="Fechar">Close synthetic</button><div data-testid="${scenario === 'group' ? 'group-info-header' : 'contact-info-header'}">Info</div><span>Synthetic result</span>${scenario.startsWith('self-') ? '<div data-testid="section-phone-number"><span id="resolved-phone"></span></div>' : '<span id="resolved-phone"></span>'}`;
               drawer.querySelector('#resolved-phone')!.textContent =
-                scenario === 'wrong-phone'
+                scenario === 'wrong-phone' || scenario === 'self-wrong-phone'
                   ? '+12025550124'
                   : scenario === 'unicode-phone'
                     ? '+1\u00a0(202)\u202f555-0123'
@@ -228,7 +238,13 @@ for (const scenario of [
         document.body.append(leftover);
       }
       if (
-        ['directory', 'directory-press', 'directory-drawer-stays', 'not-found'].includes(scenario)
+        [
+          'directory',
+          'directory-press',
+          'directory-drawer-stays',
+          'not-found',
+          'unrecognized',
+        ].includes(scenario)
       ) {
         const newChat = document.createElement('button');
         newChat.setAttribute('aria-label', 'Nova conversa');
@@ -312,7 +328,10 @@ for (const scenario of [
           locateByPhone: true,
           recipientPhone: '+12025550123',
           text: 'Synthetic reply',
-          mode: scenario.startsWith('supervised') ? 'SUPERVISED' : 'AUTO',
+          mode:
+            scenario.startsWith('supervised') || scenario === 'self-row-supervised'
+              ? 'SUPERVISED'
+              : 'AUTO',
           explicitAuthorization: true,
           leaseUntil: new Date(Date.now() + 180000).toISOString(),
           timing: {
@@ -385,11 +404,14 @@ for (const scenario of [
         'search-busy',
         'draft',
         'supervised',
+        'self-row',
+        'self-row-supervised',
       ].includes(scenario)
     ) {
+      const supervised = scenario === 'supervised' || scenario === 'self-row-supervised';
       // SUPERVISED ends with the verified draft and never clicks Send.
       expect(state.steps).toEqual(
-        scenario === 'supervised' ? ['DRAFTED'] : ['WAITING_AUTO_SEND', 'SENDING', 'SENT'],
+        supervised ? ['DRAFTED'] : ['WAITING_AUTO_SEND', 'SENDING', 'SENT'],
       );
       expect(state.phases.indexOf('CHAT_OPEN_STARTED')).toBeGreaterThanOrEqual(0);
       expect(state.phases.indexOf('CHAT_OPENED')).toBeGreaterThan(
@@ -400,9 +422,8 @@ for (const scenario of [
       );
       expect(state.hiddenWrites).toBe(false);
       // 'supervised' also proves a profile drawer closed by resetAfterVerify still validates.
-      expect(state.clicks).toBe(scenario === 'supervised' ? 0 : 1);
-      if (scenario === 'supervised')
-        await expect(page.locator('#main footer [contenteditable]')).not.toBeEmpty();
+      expect(state.clicks).toBe(supervised ? 0 : 1);
+      if (supervised) await expect(page.locator('#main footer [contenteditable]')).not.toBeEmpty();
       expect(state.profileClicks).toBe(1);
       // The executor finishes only after cleanup closed any late drawer, exactly once.
       if (scenario === 'drawer-opens-late') expect(state.backClicks).toBe(1);
@@ -429,6 +450,9 @@ for (const scenario of [
       expect(state.steps).not.toContain('SENDING');
       expect(state.steps).not.toContain('DRAFTED');
       expect(state.steps.at(-1)).toBe('FAILED');
+      // A rejected recipient never receives composed text.
+      if (scenario === 'self-wrong-phone')
+        await expect(page.locator('#main footer [contenteditable]')).toBeEmpty();
       if (scenario === 'no-navigation') {
         expect(state.phases).toContain('CHAT_OPEN_STARTED');
         expect(state.phases).not.toContain('CHAT_OPENED');
@@ -440,6 +464,8 @@ for (const scenario of [
       expect(state.codes.at(-1)).toBe(
         {
           'not-found': 'PHONE_CONTACT_NOT_FOUND',
+          unrecognized: 'SEARCH_ROWS_UNRECOGNIZED',
+          'self-wrong-phone': 'RECIPIENT_PHONE_MISMATCH',
           'no-navigation': 'PHONE_CHAT_UNAVAILABLE',
           'profile-edit': 'PROFILE_HAS_INPUT',
           'profile-close-unavailable': 'PROFILE_CLOSE_UNAVAILABLE',
@@ -473,6 +499,8 @@ for (const scenario of [
             | 'search-busy'
             | 'draft'
             | 'supervised'
+            | 'self-row'
+            | 'self-row-supervised'
           >
         ],
       );
