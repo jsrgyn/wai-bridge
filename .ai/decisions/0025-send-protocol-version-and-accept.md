@@ -26,5 +26,8 @@ Após uma implantação parcial, a Local API gerenciada pelo launchd continuou e
 
 - Uma implantação parcial produz erro visível (`CLIENT_OUTDATED`, `API_OUTDATED`, banner no painel) em vez de silêncio.
 - Limite conhecido: `API_OUTDATED` só é visível nos logs do agente/extensão e no painel, não no status do pedido, e o pedido reivindicado pela API antiga permanece `CLAIMED` até o reinício. Um escopo por contexto de poll antigo pode permanecer até o próximo poll.
+- Limite conhecido: a pausa após `EXTENSION_NO_ACK` dura só até o próximo poll READY (segundos); ainda não há limite de no-ack por comando, então, se o aceite falhar sempre, o mesmo pedido cicla `CLAIMED` → 20 s → `QUEUED` registrando `EXTENSION_NO_ACK` a cada vez, até ser cancelado pelo painel.
+- Jobs em andamento de um cliente desatualizado após um upgrade são reenfileirados ou marcados `UNKNOWN`, pois o lease não é renovado em polls `CLIENT_OUTDATED`.
+- Com API nova, extensão nova e agente macOS antigo, o host antigo rejeita localmente o poll de protocolo 3 (ou o campo `reason`); a extensão vê apenas `API_UNAVAILABLE`/`CONTENT_UNREACHABLE` com a API saudável e a ponte `STALE`/`UNSEEN` em `/api/status`. Reconstruir e reiniciar o native host resolve.
 - Operadores precisam rodar o script após cada atualização; `--check` serve para verificação rotineira. O script não é executado automaticamente.
 - Clientes MCP e a aba do WhatsApp Web ainda precisam ser recarregados manualmente.
