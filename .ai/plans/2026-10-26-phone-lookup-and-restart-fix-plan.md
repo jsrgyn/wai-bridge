@@ -2,7 +2,7 @@
 
 - Data: 2026-10-26
 - Base: main 428fb90 (PR #2 mesclado)
-- Status: diagnóstico concluído; parte A implementada; partes B e D aguardam evidência do diagnóstico
+- Status: diagnóstico concluído; parte A implementada e testada (`SEARCH_STRUCTURE`, `waiSearchDiagnostics` com 3 relatórios, botão "Diagnosticar busca" no painel); partes B e D aguardam o relatório real
 
 ## 1. Sintomas relatados
 
