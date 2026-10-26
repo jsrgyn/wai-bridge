@@ -43,7 +43,11 @@ export const SearchStructureReportSchema = z
   })
   .strict();
 export type SearchStructureReport = z.infer<typeof SearchStructureReportSchema>;
-export const SEARCH_DIAGNOSTIC_CODES = ['PHONE_CONTACT_NOT_FOUND', 'SEARCH_RESULTS_NOT_READY'] as const;
+export const SEARCH_DIAGNOSTIC_CODES = [
+  'PHONE_CONTACT_NOT_FOUND',
+  'SEARCH_RESULTS_NOT_READY',
+  'SEARCH_ROWS_UNRECOGNIZED',
+] as const;
 export const SearchDiagnosticEntrySchema = z
   .object({
     code: z.enum(SEARCH_DIAGNOSTIC_CODES),

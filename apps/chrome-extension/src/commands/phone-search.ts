@@ -26,6 +26,9 @@ export function isVisible(element: Element): boolean {
   }
   return true;
 }
+/** Contact rows and the account's own chat row, which WhatsApp renders without a cell frame. */
+const RESULT_ROW = '[data-testid="cell-frame-container"],[data-testid="message-yourself-row"]';
+const SELF_ROW = '[data-testid="message-yourself-row"]';
 export type ResolvedPhoneRecipient = {
   root: HTMLElement;
   contextId: string;
@@ -37,6 +40,7 @@ export class PhoneSearch {
   private input: HTMLInputElement | undefined;
   private phone: string | undefined;
   private interrupted = false;
+  private unrecognized = false;
   constructor(
     private readonly doc: Document,
     private readonly identity: { current(): ConversationIdentity | undefined },
@@ -103,6 +107,7 @@ export class PhoneSearch {
     const baseline = this.resultLabels('#pane-side');
     this.write(phone);
     check();
+    this.unrecognized = false;
     let candidate = await this.findCandidate('#pane-side', check, baseline);
     if (!candidate) {
       // Search the visible contact directory as well, including contacts without a prior chat.
@@ -113,7 +118,7 @@ export class PhoneSearch {
           'button[aria-label="Nova conversa"],button[aria-label="New chat"]',
         ),
       ].filter(isVisible);
-      if (buttons.length !== 1 || buttons[0]!.disabled) throw new Error('PHONE_CONTACT_NOT_FOUND');
+      if (buttons.length !== 1 || buttons[0]!.disabled) throw new Error(this.notFoundCode());
       buttons[0]!.click();
       this.input = undefined;
       const input = await this.until(() => {
@@ -129,7 +134,7 @@ export class PhoneSearch {
       this.write(phone);
       candidate = await this.findCandidate('[data-testid="new-chat-drawer"]', check);
     }
-    if (!candidate) throw new Error('PHONE_CONTACT_NOT_FOUND');
+    if (!candidate) throw new Error(this.notFoundCode());
     check();
     const expectedLabel = this.resultLabel(candidate);
     if (!expectedLabel) throw new Error('PHONE_RESULT_LABEL_UNAVAILABLE');
@@ -265,7 +270,17 @@ export class PhoneSearch {
       /* Diagnostics never change execution. */
     }
   }
+  private notFoundCode(): string {
+    // Visible rows of an unknown shape are a structure change, not a missing contact.
+    return this.unrecognized ? 'SEARCH_ROWS_UNRECOGNIZED' : 'PHONE_CONTACT_NOT_FOUND';
+  }
   private resultLabel(candidate: HTMLElement): string | undefined {
+    const label = this.rawResultLabel(candidate);
+    // The own-chat row appends a suffix the chat header omits. The phone is
+    // still proven afterwards from the opened profile, never from this name.
+    return candidate.matches(SELF_ROW) ? label?.replace(/\s+\((você|you)\)$/iu, '') : label;
+  }
+  private rawResultLabel(candidate: HTMLElement): string | undefined {
     const title = candidate.querySelector('[data-testid="cell-frame-title"]');
     if (!title) return undefined;
     // The title container also contains the unread badge. Read the named span
@@ -286,7 +301,7 @@ export class PhoneSearch {
       actionable && scope.contains(actionable) && (!row || row.contains(actionable))
         ? actionable
         : candidate;
-    if (target.querySelectorAll('[data-testid="cell-frame-container"]').length > 1)
+    if (target.querySelectorAll(RESULT_ROW).length > 1)
       throw new Error('AMBIGUOUS_PHONE_RESULTS');
     this.traceOpen('CHAT_OPEN_STARTED');
     target.focus({ preventScroll: true });
@@ -334,15 +349,15 @@ export class PhoneSearch {
     let section: boolean | undefined;
     const candidates: HTMLElement[] = [];
     for (const element of container.querySelectorAll<HTMLElement>(
-      '[role="heading"],h1,h2,h3,[data-testid="cell-frame-container"]',
+      `[role="heading"],h1,h2,h3,${RESULT_ROW}`,
     )) {
-      if (element.matches('[data-testid="cell-frame-container"]')) {
+      if (element.matches(RESULT_ROW)) {
         if (!isVisible(element) || section === false) continue;
         if (scope !== '#pane-side' && !element.closest('[role="button"]')) continue;
         candidates.push(element);
       } else if (
         scope === '#pane-side' &&
-        !element.closest('[data-testid="cell-frame-container"]') &&
+        !element.closest(RESULT_ROW) &&
         isVisible(element)
       ) {
         const title = element.textContent
@@ -355,8 +370,20 @@ export class PhoneSearch {
     }
     return candidates;
   }
+  /** Visible list rows with text that hold no recognized result container or heading. */
+  private hasUnrecognizedRows(scope: string): boolean {
+    const container = this.doc.querySelector(scope);
+    if (!container) return false;
+    return [...container.querySelectorAll<HTMLElement>('[role="row"],[role="listitem"]')].some(
+      (row) =>
+        isVisible(row) &&
+        Boolean(row.textContent?.trim()) &&
+        !row.querySelector(`${RESULT_ROW},[role="heading"],h1,h2,h3`) &&
+        !row.closest(RESULT_ROW),
+    );
+  }
   private resultLabels(scope: string): string[] {
-    return [...this.doc.querySelectorAll(`${scope} [data-testid="cell-frame-container"]`)]
+    return [...this.doc.querySelectorAll(`${scope} :is(${RESULT_ROW})`)]
       .filter(isVisible)
       .map((row) => row.querySelector('[data-testid="cell-frame-title"]')?.textContent ?? '');
   }
@@ -412,6 +439,7 @@ export class PhoneSearch {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     if (!updated) throw new Error('SEARCH_RESULTS_NOT_READY');
+    if (this.hasUnrecognizedRows(scope)) this.unrecognized = true;
     return undefined;
   }
   /** Cleans the sidebar search, closes the new-chat and profile drawers. Idempotent. */
