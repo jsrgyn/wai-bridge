@@ -9,3 +9,4 @@ export * from './conversation-review.js';
 export * from './contact-directory.js';
 export * from './dialogue-sync-batch.js';
 export * from './operations.js';
+export * from './search-structure.js';

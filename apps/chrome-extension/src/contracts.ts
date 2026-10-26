@@ -49,6 +49,7 @@ export { CaptureObservationSchema };
 
 export const ContentMessageSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('GET_COMPATIBILITY')}).strict(),
+  z.object({ kind: z.literal('SEARCH_STRUCTURE') }).strict(),
   z.object({kind:z.literal('SYNC_CANCEL'),requestId:z.uuid()}).strict(),
   z.object({ kind: z.literal('GET_SYNC_CONTEXT') }).strict(),
   z.object({ kind: z.literal('SYNC_DIALOGUE'), job: DialogueSyncJobSchema }).strict(),

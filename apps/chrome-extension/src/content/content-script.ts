@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { ContactDetector } from '../adapters/contact-detector.js';
 import { VisibleSendExecutor } from '../commands/visible-send.js';
 import { parseContentMessage } from '../messaging/protocol.js';
+import { buildSearchStructureReport } from './search-structure.js';
 import { MonitorObserver } from '../observers/monitor-observer.js';
 import type { CaptureObservation } from '../contracts.js';
 import { AutomaticContext } from '../identity/automatic-context.js';
@@ -130,6 +131,15 @@ const onMessage: Parameters<typeof chrome.runtime.onMessage.addListener>[0] = (
   }
   if (runtimeClient.extensionId && _sender.id !== runtimeClient.extensionId) {
     respond({ ok: false, error: 'UNAUTHORIZED_SENDER' });
+    return;
+  }
+  if (parsed.data.kind === 'SEARCH_STRUCTURE') {
+    // Read-only: structure only (counts and data-testid values), no typing or clicks.
+    try {
+      respond({ ok: true, report: buildSearchStructureReport(document) });
+    } catch {
+      respond({ ok: false, error: 'SEARCH_STRUCTURE_UNAVAILABLE' });
+    }
     return;
   }
   if(parsed.data.kind==='GET_COMPATIBILITY'){respond({ok:true,compatibility:uiCompatibility(document)});return;}
