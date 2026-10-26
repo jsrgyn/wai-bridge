@@ -179,7 +179,7 @@ export const NativeResponseSchema = z.discriminatedUnion('type', [
   }),
   RequestBase.extend({
     type: z.literal('ERROR'),
-    code: z.enum(['INVALID_REQUEST', 'API_UNAVAILABLE']),
+    code: z.enum(['INVALID_REQUEST', 'API_UNAVAILABLE', 'API_OUTDATED']),
     at: UtcTimestampSchema,
   }),
   RequestBase.extend({

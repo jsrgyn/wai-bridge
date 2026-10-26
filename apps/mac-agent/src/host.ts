@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
 import { NativeMessageReader, writeNativeMessage } from './framing.js';
-import { LocalApiClient } from './api-client.js';
+import { ApiOutdatedError, LocalApiClient } from './api-client.js';
 import type { HostConfig } from './config.js';
 
 export interface HostOptions {
@@ -250,12 +250,12 @@ export async function runNativeHost(options: HostOptions): Promise<void> {
               type: 'SEND_PROGRESS_RESULT',
               result: await options.api.sendProgress(request.input),
             });
-        } catch {
+        } catch (error) {
           await write({
             version: 1,
             id: request.id,
             type: 'ERROR',
-            code: 'API_UNAVAILABLE',
+            code: error instanceof ApiOutdatedError ? 'API_OUTDATED' : 'API_UNAVAILABLE',
             at: now().toISOString(),
           });
         }

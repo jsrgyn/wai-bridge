@@ -22,6 +22,7 @@ import {
   ExtensionSendPollSchema,
   ExtensionSendProgressSchema,
   ExtensionSendCommandSchema,
+  SEND_PROTOCOL_VERSION,
   SendTargetSchema,
   sendTarget,
 } from '@wai-bridge/shared';
@@ -326,6 +327,29 @@ export class ExtensionSendRepository {
     const input = ExtensionSendPollSchema.parse(raw);
     return this.db
       .transaction(() => {
+        if (input.protocolVersion !== SEND_PROTOCOL_VERSION) {
+          // An outdated client cannot parse current commands: never claim, never
+          // mutate the queue, only surface the mismatch in the bridge heartbeat.
+          const healthScope = `extension-send-health:${input.extensionInstanceId}`;
+          this.db
+            .prepare(
+              `INSERT INTO wa_sync_state(id,scope,cursor,updated_at) VALUES(?,?,?,?) ON CONFLICT(scope) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at,version=wa_sync_state.version+1`,
+            )
+            .run(
+              healthScope,
+              healthScope,
+              JSON.stringify({
+                accountId: input.identity?.accountId ?? null,
+                allowClaim: false,
+                ready: false,
+                reason: 'CLIENT_OUTDATED',
+                protocolVersion: input.protocolVersion ?? 1,
+                clientBuild: input.clientBuild ?? null,
+              }),
+              this.now(),
+            );
+          return { command: null, reason: 'CLIENT_OUTDATED' as const };
+        }
         this.recover();
         const active = input.activeCommand ? this.outbox.get(input.activeCommand.id) : undefined;
         if (
@@ -342,7 +366,9 @@ export class ExtensionSendRepository {
             .prepare(
               `SELECT id FROM wa_outbox WHERE kind='extension-send' AND status NOT IN ('REQUESTED','QUEUED','WAITING_WHATSAPP',${terminalSql}) AND substr(lease_owner,1,?)=?`,
             )
-            .all(input.extensionInstanceId.length + 1, `${input.extensionInstanceId}:`) as { id: string }[];
+            .all(input.extensionInstanceId.length + 1, `${input.extensionInstanceId}:`) as {
+            id: string;
+          }[];
           for (const { id } of orphans) this.interrupt(this.outbox.get(id)!, 'EXTENSION_ORPHANED');
         }
         const reason = input.reason ?? (input.ready ? 'READY' : 'TAB_HIDDEN');
@@ -367,12 +393,12 @@ export class ExtensionSendRepository {
         const target = input.identity ? sendTarget(input.identity) : undefined;
         const baseScope = `extension-send-context:${input.extensionInstanceId}`;
         const scope = target ? `${baseScope}:${target.accountId}` : baseScope;
-        if (!target || input.protocolVersion === 2)
-          this.db
-            .prepare(
-              "UPDATE wa_sync_state SET cursor=json_set(cursor,'$.allowClaim',json('false'),'$.ready',json('false')) WHERE scope=? OR (?=1 AND scope LIKE ?)",
-            )
-            .run(baseScope, !target ? 1 : 0, `${baseScope}:%`);
+        // Reset stale per-context heartbeats; only this poll's scopes are rewritten below.
+        this.db
+          .prepare(
+            "UPDATE wa_sync_state SET cursor=json_set(cursor,'$.allowClaim',json('false'),'$.ready',json('false')) WHERE scope=? OR (?=1 AND scope LIKE ?)",
+          )
+          .run(baseScope, !target ? 1 : 0, `${baseScope}:%`);
         const heartbeatScopes = [scope, `extension-send-health:${input.extensionInstanceId}`];
         for (const heartbeatScope of heartbeatScopes) {
           this.db
@@ -432,7 +458,9 @@ export class ExtensionSendRepository {
         const timing = this.timingOf(found);
         const token = randomUUID();
         const owner = `${input.extensionInstanceId}:${input.identity.contextId}:${token}`;
-        if (!this.outbox.acquireInterfaceLease(owner, found.id, this.now(), timing.executionTimeoutMs))
+        if (
+          !this.outbox.acquireInterfaceLease(owner, found.id, this.now(), timing.executionTimeoutMs)
+        )
           return { command: null };
         const until = new Date(Date.parse(this.now()) + timing.executionTimeoutMs).toISOString();
         const appendToDraft = this.hasEarlierDraft(found);
@@ -577,16 +605,16 @@ export class ExtensionSendRepository {
             input.step === 'DRAFTED'
               ? 'SUCCEEDED'
               : input.step === 'FAILED'
-              ? 'FAILED'
-              : input.step === 'UNKNOWN'
-                ? 'UNKNOWN'
-                : input.step === 'CANCELLED'
-                  ? 'CANCELLED'
-                  : input.step === 'SENDING'
-                    ? 'STARTED'
-                    : input.step === 'SENT'
-                      ? 'SUCCEEDED'
-                      : 'WAITING',
+                ? 'FAILED'
+                : input.step === 'UNKNOWN'
+                  ? 'UNKNOWN'
+                  : input.step === 'CANCELLED'
+                    ? 'CANCELLED'
+                    : input.step === 'SENDING'
+                      ? 'STARTED'
+                      : input.step === 'SENT'
+                        ? 'SUCCEEDED'
+                        : 'WAITING',
           code: flowCode(input.code),
         });
         if (terminal.includes(input.step)) this.outbox.releaseInterfaceLease(owner, item.id);
@@ -700,7 +728,11 @@ export class ExtensionSendRepository {
   private queueItem(row: QueueRow, position: number | null): ExtensionSendQueueItem {
     // Legacy rows predate the queue: REQUESTED waited in line, WAITING_USER was mid-execution.
     const status =
-      row.status === 'REQUESTED' ? 'QUEUED' : row.status === 'WAITING_USER' ? 'COMPOSED' : row.status;
+      row.status === 'REQUESTED'
+        ? 'QUEUED'
+        : row.status === 'WAITING_USER'
+          ? 'COMPOSED'
+          : row.status;
     return ExtensionSendQueueItemSchema.parse({
       id: row.id,
       status,
@@ -717,7 +749,9 @@ export class ExtensionSendRepository {
     const row = this.db
       .prepare('SELECT paused,pause_reason FROM wa_send_queue_state WHERE singleton_id=1')
       .get() as { paused: number; pause_reason: string | null } | undefined;
-    return row?.paused ? { paused: true, pauseReason: row.pause_reason } : { paused: false, pauseReason: null };
+    return row?.paused
+      ? { paused: true, pauseReason: row.pause_reason }
+      : { paused: false, pauseReason: null };
   }
   /** A pending DRAFTED for the same contact, whether it was keyed by phone or by conversation. */
   private hasEarlierDraft(found: {
@@ -758,11 +792,23 @@ export class ExtensionSendRepository {
         AND json_extract(payload_json,'$.target.accountId')=?
         AND (target_key IN (${list.map(() => '?').join(',')}) OR (? IS NOT NULL AND json_extract(payload_json,'$.recipientPhone')=?)) LIMIT 1`,
         )
-        .get(found.id, found.created_at, found.created_at, found.id, accountId, ...list, phone ?? null, phone ?? null),
+        .get(
+          found.id,
+          found.created_at,
+          found.created_at,
+          found.id,
+          accountId,
+          ...list,
+          phone ?? null,
+          phone ?? null,
+        ),
     );
   }
   private enqueue(id: string, payload: z.infer<typeof Payload>, targetKey: string) {
-    const timing = resolveSendTiming(new SendSettingsRepository(this.db, this.now).get(), payload.timing);
+    const timing = resolveSendTiming(
+      new SendSettingsRepository(this.db, this.now).get(),
+      payload.timing,
+    );
     const priority = payload.mode === 'AUTO' && timing.autoCountdownMs === 0 ? 1 : 0;
     this.db
       .prepare('UPDATE wa_outbox SET priority=?,target_key=?,timing_json=? WHERE id=?')

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NativeMessageReader, writeNativeMessage } from '../src/framing.js';
 import { runNativeHost } from '../src/host.js';
 import type { HostConfig } from '../src/config.js';
-import type { LocalApiClient } from '../src/api-client.js';
+import { LocalApiClient } from '../src/api-client.js';
 
 const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
 const extensionInstanceId = '11111111-1111-4111-8111-111111111111';
@@ -159,7 +159,7 @@ it('answers send control frames while observation persistence is stalled',async(
  const api={recordExtensionState:vi.fn(),recordObservation:async()=>{await blocked;return {observationId,eventId:randomUUID(),duplicate:false};},sendPoll:vi.fn().mockResolvedValue({command:null})} as unknown as LocalApiClient;
  const running=runNativeHost({input,output,stderr:new PassThrough(),callerOrigin:`chrome-extension://${extensionId}`,config,api});
  const pollId=randomUUID();
- input.write(Buffer.concat([frame({version:1,id:randomUUID(),type:'HELLO',extensionInstanceId}),frame({version:1,id:observationId,type:'CAPTURE_OBSERVATION',extensionInstanceId,observation:{kind:'CAPTURE_OBSERVATION',observationId,observedAt:new Date().toISOString(),observationType:'CONVERSATION_ACTIVITY',captureState:'DETECTED',conversation:{label:'Synthetic control latency',kind:'UNKNOWN'},senderLabel:null,direction:'UNKNOWN',content:null,contentAvailability:'UNAVAILABLE',media:[]}}),frame({version:1,id:pollId,type:'SEND_POLL',input:{extensionInstanceId,allowClaim:false,ready:false,reason:'CONTENT_UNREACHABLE',protocolVersion:2}})]));
+ input.write(Buffer.concat([frame({version:1,id:randomUUID(),type:'HELLO',extensionInstanceId}),frame({version:1,id:observationId,type:'CAPTURE_OBSERVATION',extensionInstanceId,observation:{kind:'CAPTURE_OBSERVATION',observationId,observedAt:new Date().toISOString(),observationType:'CONVERSATION_ACTIVITY',captureState:'DETECTED',conversation:{label:'Synthetic control latency',kind:'UNKNOWN'},senderLabel:null,direction:'UNKNOWN',content:null,contentAvailability:'UNAVAILABLE',media:[]}}),frame({version:1,id:pollId,type:'SEND_POLL',input:{extensionInstanceId,allowClaim:false,ready:false,reason:'CONTENT_UNREACHABLE',protocolVersion:3}})]));
  try{await vi.waitFor(()=>expect(decodeFrames(Buffer.concat(chunks))).toContainEqual(expect.objectContaining({id:pollId,type:'SEND_POLL_RESULT'})));}
  finally{release();input.end();await running;}
 });
@@ -173,3 +173,84 @@ it('accepts only extension-scoped diagnostic events after HELLO and returns a lo
  const replies=decodeFrames(Buffer.concat(chunks));expect(replies).toContainEqual({version:1,id,type:'FLOW_LOGS_RESULT',accepted:1});expect(logs).toHaveBeenCalledTimes(1);expect(replies).toContainEqual(expect.objectContaining({type:'ERROR',code:'INVALID_REQUEST'}));
 });
 it('requires a matching handshake for allowlisted management commands and never forwards arbitrary paths',async()=>{const input=new PassThrough(),output=new PassThrough(),chunks:Buffer[]=[];output.on('data',(chunk:Buffer)=>chunks.push(chunk));const management=vi.fn().mockResolvedValue({coverageComplete:false});const api={management,recordExtensionState:vi.fn().mockResolvedValue(undefined)} as unknown as LocalApiClient;const run=runNativeHost({input,output,stderr:new PassThrough(),callerOrigin:`chrome-extension://${extensionId}`,config,api});const command={version:1,id:randomUUID(),type:'MANAGEMENT',extensionInstanceId,input:{operation:'SUMMARY'}};input.end(Buffer.concat([frame(command),frame({version:1,id:randomUUID(),type:'HELLO',extensionInstanceId}),frame({...command,id:randomUUID()}),frame({...command,id:randomUUID(),extensionInstanceId:randomUUID()})]));await run;expect(management).toHaveBeenCalledExactlyOnceWith({operation:'SUMMARY'});expect((decodeFrames(Buffer.concat(chunks)) as Array<{type:string}>).map(r=>r.type)).toEqual(expect.arrayContaining(['ERROR','HOST_STATE','MANAGEMENT_RESULT','ERROR']));});
+
+describe('send poll contract mismatch', () => {
+  const commandId = '22222222-2222-4222-8222-222222222222';
+  const traceId = '33333333-3333-4333-8333-333333333333';
+  // Shape produced by an outdated Local API build: no timing/appendToDraft.
+  const outdatedCommand = {
+    id: commandId,
+    traceId,
+    leaseToken: randomUUID(),
+    contextId: randomUUID(),
+    conversationId: randomUUID(),
+    target: { accountId: randomUUID(), type: 'PHONE', referenceKey: '+5500000000001' },
+    text: 'Synthetic outdated payload',
+    mode: 'SUPERVISED',
+    explicitAuthorization: true,
+    leaseUntil: '2026-10-25T12:00:00.000Z',
+  };
+  function host(responses: Array<() => Response>) {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const chunks: Buffer[] = [];
+    output.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let index = 0;
+    const request = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/api/extension/outbox/poll')) return responses[index++]!();
+      return new Response(JSON.stringify({ accepted: 0 }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = new LocalApiClient(config, request);
+    vi.spyOn(api, 'recordExtensionState').mockResolvedValue(undefined);
+    const log = vi.spyOn(api, 'log');
+    const run = runNativeHost({ input, output, stderr: new PassThrough(), callerOrigin: `chrome-extension://${extensionId}`, config, api });
+    const poll = (id: string) =>
+      frame({ version: 1, id, type: 'SEND_POLL', input: { extensionInstanceId, allowClaim: true, ready: true, reason: 'READY', protocolVersion: 3 } });
+    return { input, chunks, log, run, poll };
+  }
+
+  it('poll result missing timing answers API_OUTDATED and logs API_CONTRACT_MISMATCH with trace', async () => {
+    const { input, chunks, log, run, poll } = host([
+      () => new Response(JSON.stringify({ command: outdatedCommand }), { status: 200 }),
+    ]);
+    const pollId = randomUUID();
+    input.end(Buffer.concat([frame({ version: 1, id: randomUUID(), type: 'HELLO', extensionInstanceId }), poll(pollId)]));
+    await run;
+    expect(decodeFrames(Buffer.concat(chunks))).toContainEqual(
+      expect.objectContaining({ id: pollId, type: 'ERROR', code: 'API_OUTDATED' }),
+    );
+    expect(log).toHaveBeenCalledWith({
+      traceId,
+      resourceId: commandId,
+      component: 'NATIVE_HOST',
+      phase: 'SEND_CLAIMED',
+      outcome: 'FAILED',
+      code: 'API_CONTRACT_MISMATCH',
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain('Synthetic outdated payload');
+  });
+
+  it('stream stays usable after API_OUTDATED', async () => {
+    const { input, chunks, run, poll } = host([
+      () => new Response(JSON.stringify({ error: { code: 'VALIDATION_ERROR' } }), { status: 400 }),
+      () => new Response('not json', { status: 502 }),
+      () => new Response(JSON.stringify({ command: null }), { status: 200 }),
+    ]);
+    const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    input.end(
+      Buffer.concat([
+        frame({ version: 1, id: randomUUID(), type: 'HELLO', extensionInstanceId }),
+        poll(ids[0]!),
+        poll(ids[1]!),
+        poll(ids[2]!),
+        frame({ version: 1, id: ids[3], type: 'HEARTBEAT', extensionInstanceId }),
+      ]),
+    );
+    await run;
+    const replies = decodeFrames(Buffer.concat(chunks)) as Array<{ id: string; type: string; code?: string }>;
+    expect(replies.find((r) => r.id === ids[0])).toMatchObject({ type: 'ERROR', code: 'API_OUTDATED' });
+    expect(replies.find((r) => r.id === ids[1])).toMatchObject({ type: 'ERROR', code: 'API_UNAVAILABLE' });
+    expect(replies.find((r) => r.id === ids[2])).toMatchObject({ type: 'SEND_POLL_RESULT', result: { command: null } });
+    expect(replies.find((r) => r.id === ids[3])).toMatchObject({ type: 'HOST_STATE' });
+  });
+});

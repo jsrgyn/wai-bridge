@@ -7,6 +7,7 @@ import {
   ExtensionSendPollResultSchema,
   ExtensionSendProgressResultSchema,
   ExtensionSendProgressSchema,
+  SEND_PROTOCOL_VERSION,
   type ConversationIdentity,
   type ExtensionSendCommand,
   type SendBridgeReasonSchema,
@@ -36,7 +37,11 @@ export class ExtensionSendBridge {
   private port: Port | undefined;
   private readonly pending = new Map<
     string,
-    { resolve: (value: unknown) => void; reject: () => void; timer: ReturnType<typeof setTimeout> }
+    {
+      resolve: (value: unknown) => void;
+      reject: (code?: string) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
   private active: Active | undefined;
   private readonly completed = new Map<string, Active>();
@@ -66,13 +71,13 @@ export class ExtensionSendBridge {
     this.pending.clear();
     // Retain a claimed job for authoritative recovery; never deliver it a second time.
   }
-  receive(raw: { id: string; type: string; result?: unknown }): boolean {
+  receive(raw: { id: string; type: string; result?: unknown; code?: string }): boolean {
     if (!['SEND_POLL_RESULT', 'SEND_PROGRESS_RESULT', 'ERROR'].includes(raw.type)) return false;
     const item = this.pending.get(raw.id);
     if (!item) return false;
     this.pending.delete(raw.id);
     clearTimeout(item.timer);
-    if (raw.type === 'ERROR') item.reject();
+    if (raw.type === 'ERROR') item.reject(raw.code);
     else item.resolve(raw.result);
     return true;
   }
@@ -124,7 +129,7 @@ export class ExtensionSendBridge {
       allowClaim: false,
       ready: false,
       reason,
-      protocolVersion: 2,
+      protocolVersion: SEND_PROTOCOL_VERSION,
       clientBuild: extensionBuild,
     });
   }
@@ -156,7 +161,7 @@ export class ExtensionSendBridge {
             allowClaim: enabled,
             ready: false,
             reason: 'EXECUTING',
-            protocolVersion: 2,
+            protocolVersion: SEND_PROTOCOL_VERSION,
             clientBuild: extensionBuild,
             identity: active.identity,
             activeCommand: {
@@ -202,6 +207,7 @@ export class ExtensionSendBridge {
       }[] = [];
       let reachable = false;
       let outdated = false;
+      let clientOutdated = false;
       for (const entry of contexts) {
         if (entry.status !== 'fulfilled') continue;
         reachable = true;
@@ -222,7 +228,7 @@ export class ExtensionSendBridge {
             ready: false,
             visible: context.ready,
             reason: !enabled ? 'SEND_DISABLED' : context.ready ? 'READY' : 'TAB_HIDDEN',
-            protocolVersion: 2,
+            protocolVersion: SEND_PROTOCOL_VERSION,
             clientBuild: extensionBuild,
             identity: context.identity,
             ...(context.conversationLabel !== undefined
@@ -230,11 +236,16 @@ export class ExtensionSendBridge {
               : {}),
           }),
         );
+        if (result.reason === 'CLIENT_OUTDATED') clientOutdated = true;
         // Preflight is read-only for delivery: no command may be claimed here.
         if (result.pending)
           candidates.push({ tab, context: { ...context, identity: context.identity } });
       }
       if (!candidates.length) {
+        if (clientOutdated) {
+          await this.report('CLIENT_OUTDATED');
+          return;
+        }
         if (outdated) {
           await this.report('CONTENT_OUTDATED');
           return;
@@ -271,7 +282,7 @@ export class ExtensionSendBridge {
           allowClaim: true,
           ready: true,
           reason: 'READY',
-          protocolVersion: 2,
+          protocolVersion: SEND_PROTOCOL_VERSION,
           clientBuild: extensionBuild,
           identity: fresh.identity,
           ...(fresh.conversationLabel !== undefined
@@ -279,6 +290,10 @@ export class ExtensionSendBridge {
             : {}),
         }),
       );
+      if (result.reason === 'CLIENT_OUTDATED') {
+        await this.report('CLIENT_OUTDATED');
+        return;
+      }
       if (!result.command) return;
       const command = ExtensionSendCommandSchema.parse(result.command);
       this.active = { tabId: tab.id!, command, identity: fresh.identity };
@@ -331,8 +346,14 @@ export class ExtensionSendBridge {
         });
       // A failed/lost acceptance ACK must never cause a second execution attempt.
       // A stalled UI request times out; active jobs remain under backend lease recovery.
+      // An outdated API is reported explicitly; allowClaim is not latched off, so the
+      // next poll claims normally once the Local API is updated.
       if (!this.active && this.port)
-        await this.report('CONTENT_UNREACHABLE').catch(() => undefined);
+        await this.report(
+          error instanceof Error && error.message === 'API_OUTDATED'
+            ? 'API_OUTDATED'
+            : 'CONTENT_UNREACHABLE',
+        ).catch(() => undefined);
     } finally {
       this.polling = false;
     }
@@ -344,7 +365,9 @@ export class ExtensionSendBridge {
         return;
       }
       const id = crypto.randomUUID();
-      const fail = () => reject(new Error('PROGRESS_UNAVAILABLE'));
+      // API_OUTDATED is surfaced as-is so the bridge can report the version mismatch.
+      const fail = (code?: string) =>
+        reject(new Error(code === 'API_OUTDATED' ? 'API_OUTDATED' : 'PROGRESS_UNAVAILABLE'));
       const timer = setTimeout(() => {
         this.pending.delete(id);
         fail();

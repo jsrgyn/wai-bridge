@@ -602,7 +602,7 @@ describe('local REST API', () => {
       method: 'POST',
       url: '/api/extension/outbox/poll',
       headers: auth(),
-      payload: { extensionInstanceId: randomUUID(), identity, allowClaim: true },
+      payload: { extensionInstanceId: randomUUID(), identity, allowClaim: true, protocolVersion: 3 },
     });
     expect(poll.statusCode).toBe(200);
     const create = async (n: number, timing?: object) =>

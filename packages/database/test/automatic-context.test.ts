@@ -9,14 +9,14 @@ it('registers a visible reference with sends disabled and never claims a send',(
     const identity={version:1 as const,type:'UI_CONTEXT' as const,source:'VISIBLE_UI' as const,accountId:randomUUID(),contextId:randomUUID(),conversationKey:randomUUID(),conversationKind:'GROUP' as const,confirmedAt:new Date().toISOString()};
     const repo=new ExtensionSendRepository(db);
     const instance=randomUUID();
-    expect(repo.poll({extensionInstanceId:instance,identity,allowClaim:false})).toEqual({command:null});
+    expect(repo.poll({ protocolVersion: 3,extensionInstanceId:instance,identity,allowClaim:false})).toEqual({command:null});
     const refs=new ConversationIdentityRepository(db);
     const first=refs.resolve(identity,'Synthetic group',identity.confirmedAt);
     expect(refs.resolve({...identity,contextId:randomUUID()},'Synthetic group',identity.confirmedAt)).toEqual(first);
     expect(refs.resolve({...identity,conversationKey:randomUUID()},'Synthetic group',identity.confirmedAt).conversationId).not.toBe(first.conversationId);
     const pending=repo.create({conversationId:first.conversationId,text:'Synthetic unsent reply',mode:'AUTO',explicitAuthorization:true},'synthetic-autocontext-00001');
     expect(pending.status).toBe('QUEUED');
-    expect(repo.poll({extensionInstanceId:instance,identity,allowClaim:false})).toEqual({command:null});
+    expect(repo.poll({ protocolVersion: 3,extensionInstanceId:instance,identity,allowClaim:false})).toEqual({command:null});
     expect(db.prepare('SELECT status FROM wa_outbox').get()).toEqual({status:'QUEUED'});
     expect(db.pragma('foreign_key_check')).toEqual([]);
   } finally {db.close();}
@@ -71,9 +71,9 @@ it('claims phone-search commands from another open chat only in the requested ac
     const request={conversationId:registered.conversationId,text:'Synthetic reply',mode:'AUTO' as const,explicitAuthorization:true as const,locateByPhone:true};
     const created=repo.create(request,'synthetic-phone-search-request');
     const extensionInstanceId=randomUUID();
-    expect(repo.poll({extensionInstanceId,identity:{...other,accountId:randomUUID()}})).toEqual({command:null});
-    expect(repo.poll({extensionInstanceId,identity:other,allowClaim:false})).toEqual({command:null});
-    expect(repo.poll({extensionInstanceId,identity:other}).command).toMatchObject({id:created.id,contextId:other.contextId,locateByPhone:true,recipientPhone:recipient.phone,target:{referenceKey:recipient.conversationKey,accountId}});
+    expect(repo.poll({ protocolVersion: 3,extensionInstanceId,identity:{...other,accountId:randomUUID()}})).toEqual({command:null});
+    expect(repo.poll({ protocolVersion: 3,extensionInstanceId,identity:other,allowClaim:false})).toEqual({command:null});
+    expect(repo.poll({ protocolVersion: 3,extensionInstanceId,identity:other}).command).toMatchObject({id:created.id,contextId:other.contextId,locateByPhone:true,recipientPhone:recipient.phone,target:{referenceKey:recipient.conversationKey,accountId}});
     const group=refs.resolve({...recipient,conversationKey:randomUUID(),conversationKind:'GROUP',phone:undefined},'Synthetic group',at);
     expect(()=>repo.create({...request,conversationId:group.conversationId},'synthetic-group-phone-search')).toThrow('RECIPIENT_PHONE_REQUIRED');
     const missing=refs.resolve({...recipient,conversationKey:randomUUID(),phone:undefined},'Synthetic without phone',at);

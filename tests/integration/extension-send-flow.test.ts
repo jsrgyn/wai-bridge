@@ -58,7 +58,7 @@ it.each(
   });
   const list = await app.inject({ method: 'GET', url: '/api/conversations', headers });
   const conversationId = list.json().items[0].id;
-  if(direct)await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers,payload:{extensionInstanceId,identity,allowClaim:true}});
+  if(direct)await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers,payload:{extensionInstanceId,identity,allowClaim:true,protocolVersion:3}});
   const created = await app.inject({
     method: 'POST',
     url: direct?'/api/extension/outbox/phone':'/api/extension/outbox',
@@ -130,7 +130,7 @@ it.each(
     const pollIdentity=locateByPhone?{...identity,phone:'+12025550124',contextId:randomUUID()}:identity;
     const response = await send({
       type: 'SEND_POLL',
-      input: { extensionInstanceId, identity:pollIdentity },
+      input: { extensionInstanceId, identity:pollIdentity, protocolVersion: 3 },
     } as Omit<NativeRequest, 'version' | 'id'>);
     expect(response.type).toBe('SEND_POLL_RESULT');
     if (response.type !== 'SEND_POLL_RESULT' || !response.result.command)

@@ -56,10 +56,10 @@ function setup() {
     explicitAuthorization: true as const,
   };
   const created = repo.create(request, 'synthetic-key-00001');
-  const poll = () => repo.poll({ extensionInstanceId, identity });
+  const poll = () => repo.poll({ protocolVersion: 3, extensionInstanceId, identity });
   const command = poll().command!;
   const pollActive = () =>
-    repo.poll({
+    repo.poll({ protocolVersion: 3,
       extensionInstanceId,
       identity,
       ready: false,
@@ -103,11 +103,27 @@ function setup() {
   };
 }
 describe('extension send queue', () => {
+  it('poll with protocolVersion 2 never claims and reports CLIENT_OUTDATED', () => {
+    const { db, repo, request, identity, extensionInstanceId, created } = setup();
+    try {
+      const second = repo.create({ ...request, text: 'Synthetic second' }, 'synthetic-key-00002');
+      for (const protocolVersion of [2, undefined] as const) {
+        expect(
+          repo.poll({ extensionInstanceId, identity, ready: true, allowClaim: true, ...(protocolVersion ? { protocolVersion } : {}) }),
+        ).toEqual({ command: null, reason: 'CLIENT_OUTDATED' });
+        expect(repo.diagnostics().bridge).toBe('CLIENT_OUTDATED');
+      }
+      expect(repo.status(created.id).status).toBe('CLAIMED');
+      expect(repo.status(second.id).status).toBe('QUEUED');
+    } finally {
+      db.close();
+    }
+  });
   it('registers an explicitly confirmed context before any new message',()=>{
     const db=openDatabase(':memory:');try{
       const repo=new ExtensionSendRepository(db);
       const identity={version:1 as const,type:'PHONE' as const,source:'PROFILE_PHONE' as const,phone:'+12025550124',accountId:randomUUID(),contextId:randomUUID(),confirmedAt:new Date().toISOString()};
-      expect(repo.poll({extensionInstanceId:randomUUID(),identity,conversationLabel:'Synthetic registered contact'}).command).toBeNull();
+      expect(repo.poll({ protocolVersion: 3,extensionInstanceId:randomUUID(),identity,conversationLabel:'Synthetic registered contact'}).command).toBeNull();
       const row=db.prepare('SELECT id,title FROM wa_conversations').get() as {id:string;title:string};
       expect(row.title).toBe('Synthetic registered contact');
       expect(repo.create({conversationId:row.id,text:'Synthetic reply',explicitAuthorization:true},'synthetic-register-key').status).toBe('QUEUED');
@@ -156,7 +172,7 @@ describe('extension send queue', () => {
         s.repo.create({ ...s.request, conversationId: randomUUID() }, 'synthetic-key-00002'),
       ).toThrow('CONFIRMED_CONVERSATION_REQUIRED');
       expect(
-        s.repo.poll({
+        s.repo.poll({ protocolVersion: 3,
           extensionInstanceId: s.extensionInstanceId,
           identity: { ...s.identity, accountId: randomUUID() },
         }).command,
@@ -241,7 +257,7 @@ function queueSetup() {
       code: 'SYNTHETIC_STEP',
     });
   const active = (command: { id: string; leaseToken: string }) =>
-    s.repo.poll({
+    s.repo.poll({ protocolVersion: 3,
       extensionInstanceId: s.extensionInstanceId,
       identity: s.identity,
       ready: false,
@@ -413,7 +429,7 @@ describe('extension send queue ordering and recovery', () => {
       expect(q.repo.queue()).toMatchObject({ paused: true, pauseReason: 'INTERRUPTED' });
       expect(q.repo.status(a).position).toBe(1);
       expect(
-        q.repo.poll({
+        q.repo.poll({ protocolVersion: 3,
           extensionInstanceId: q.extensionInstanceId,
           identity: q.identity,
           reason: 'AMBIGUOUS_TABS',
@@ -434,10 +450,10 @@ describe('extension send queue ordering and recovery', () => {
     try {
       const a = q.create();
       const command = q.poll().command!;
-      q.repo.poll({ extensionInstanceId: randomUUID(), identity: q.identity, ready: true });
+      q.repo.poll({ protocolVersion: 3, extensionInstanceId: randomUUID(), identity: q.identity, ready: true });
       expect(q.status(a).status).toBe('CLAIMED');
       expect(
-        q.repo.poll({
+        q.repo.poll({ protocolVersion: 3,
           extensionInstanceId: q.extensionInstanceId,
           identity: q.identity,
           ready: false,
@@ -501,16 +517,16 @@ describe('extension send queue ordering and recovery', () => {
     try {
       const a = q.create();
       expect(
-        q.repo.poll({
+        q.repo.poll({ protocolVersion: 3,
           extensionInstanceId: q.extensionInstanceId,
           identity: q.identity,
           reason: 'CONTENT_UNREACHABLE',
         }),
       ).toEqual({ command: null, pending: true });
       expect(q.repo.status(a)).toMatchObject({ status: 'WAITING_WHATSAPP', position: 1 });
-      q.repo.poll({ extensionInstanceId: q.extensionInstanceId, identity: q.identity, allowClaim: false });
+      q.repo.poll({ protocolVersion: 3, extensionInstanceId: q.extensionInstanceId, identity: q.identity, allowClaim: false });
       expect(q.status(a).status).toBe('WAITING_WHATSAPP');
-      q.repo.poll({ extensionInstanceId: q.extensionInstanceId, ready: true });
+      q.repo.poll({ protocolVersion: 3, extensionInstanceId: q.extensionInstanceId, ready: true });
       expect(q.status(a).status).toBe('QUEUED');
       expect(q.poll().command?.id).toBe(a);
     } finally {
@@ -522,7 +538,7 @@ describe('extension send queue ordering and recovery', () => {
     try {
       const a = q.create();
       const b = q.create({ timing: { queueMaxWaitMs: null } });
-      q.repo.poll({ extensionInstanceId: q.extensionInstanceId, identity: q.identity, ready: false });
+      q.repo.poll({ protocolVersion: 3, extensionInstanceId: q.extensionInstanceId, identity: q.identity, ready: false });
       q.setTime('2026-10-18T12:31:00.000Z');
       q.repo.recover();
       expect(q.status(a)).toMatchObject({ status: 'FAILED', resultCode: 'REQUEST_EXPIRED' });
@@ -541,7 +557,7 @@ describe('extension send queue ordering and recovery', () => {
       const queued = q.create();
       expect(q.repo.cancel(queued).status).toBe('CANCELLED');
       const waiting = q.create();
-      q.repo.poll({ extensionInstanceId: q.extensionInstanceId, identity: q.identity, ready: false });
+      q.repo.poll({ protocolVersion: 3, extensionInstanceId: q.extensionInstanceId, identity: q.identity, ready: false });
       expect(q.status(waiting).status).toBe('WAITING_WHATSAPP');
       expect(q.repo.cancel(waiting).status).toBe('CANCELLED');
       const auto = q.create({ mode: 'AUTO' });

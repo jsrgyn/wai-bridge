@@ -20,6 +20,14 @@ import {
 } from '@wai-bridge/shared';
 import type { HostConfig } from './config.js';
 
+/** The Local API speaks an incompatible send contract (older or newer build). */
+export class ApiOutdatedError extends Error {
+  constructor() {
+    super('API_OUTDATED');
+    this.name = 'ApiOutdatedError';
+  }
+}
+
 export class LocalApiClient {
   private readonly reporter: BufferedFlowReporter;
   private lastNativeStatus: string | undefined;
@@ -122,9 +130,25 @@ export class LocalApiClient {
     return response.json();
   }
   async sendPoll(input: unknown) {
-    const result = ExtensionSendPollResultSchema.parse(
-      await this.sendRequest('poll', ExtensionSendPollSchema.parse(input)),
-    );
+    const raw: unknown = await this.sendRequest('poll', ExtensionSendPollSchema.parse(input));
+    const parsed = ExtensionSendPollResultSchema.safeParse(raw);
+    if (!parsed.success) {
+      // Never log the raw body (it may carry message text): only well-formed ids.
+      const command = (raw as { command?: { id?: unknown; traceId?: unknown } } | null)?.command;
+      const id = z.uuid().safeParse(command?.id);
+      const trace = z.uuid().safeParse(command?.traceId);
+      if (id.success)
+        this.log({
+          traceId: trace.success ? trace.data : id.data,
+          resourceId: id.data,
+          component: 'NATIVE_HOST',
+          phase: 'SEND_CLAIMED',
+          outcome: 'FAILED',
+          code: 'API_CONTRACT_MISMATCH',
+        });
+      throw new ApiOutdatedError();
+    }
+    const result = parsed.data;
     if (result.command)
       this.log({
         traceId: result.command.traceId ?? result.command.id,
@@ -169,8 +193,17 @@ export class LocalApiClient {
           signal: AbortSignal.timeout(5000),
         },
       );
-      if (!response.ok) throw new Error('HTTP_ERROR');
-      const result = await response.json();
+      if (!response.ok) {
+        if (action === 'poll' && response.status === 400) {
+          const data = (await response.json().catch(() => null)) as {
+            error?: { code?: unknown };
+          } | null;
+          // The API rejected our poll body: it predates the current protocol.
+          if (data?.error?.code === 'VALIDATION_ERROR') throw new ApiOutdatedError();
+        }
+        throw new Error('HTTP_ERROR');
+      }
+      const result: unknown = await response.json();
       if (logged)
         this.log({
           traceId,

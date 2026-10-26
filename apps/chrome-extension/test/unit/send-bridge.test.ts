@@ -44,6 +44,8 @@ function setup() {
     contextGone: false,
     executing: undefined as string | null | undefined,
     acceptanceHung: false,
+    apiOutdated: false,
+    clientOutdated: false,
     tabs: [{ id: 5, windowId: 1, url: 'https://web.whatsapp.com/' }],
     requests: [] as { type: string; input: Record<string, unknown> }[],
   };
@@ -95,7 +97,12 @@ function setup() {
       const req = raw as { id: string; type: string; input: Record<string, unknown> };
       state.requests.push(req);
       let result: unknown;
-      if (req.type === 'SEND_PROGRESS') {
+      if (req.type === 'SEND_POLL' && state.apiOutdated) {
+        queueMicrotask(() => bridge.receive({ id: req.id, type: 'ERROR', code: 'API_OUTDATED' }));
+        return;
+      }
+      if (req.type === 'SEND_POLL' && state.clientOutdated) result = { command: null, reason: 'CLIENT_OUTDATED' };
+      else if (req.type === 'SEND_PROGRESS') {
         state.phase = String(req.input.step);
         if (['CANCELLED', 'FAILED', 'SENT', 'UNKNOWN', 'DRAFTED'].includes(state.phase)) state.queued = false;
         result = { ok: true, status: state.phase };
@@ -276,4 +283,24 @@ it('reports NO_WHATSAPP_TAB even when no tab exists', async () => {
   await bridge.poll();
   expect(state.requests.at(-1)?.input).toMatchObject({ reason: 'NO_WHATSAPP_TAB', ready: false });
   bridge.disconnect();
+});
+it('bridge surfaces API_OUTDATED reason', async () => {
+  const { bridge, state } = setup();
+  state.apiOutdated = true;
+  await bridge.poll();
+  expect(state.executions).toBe(0);
+  const polls = state.requests.filter((r) => r.type === 'SEND_POLL');
+  expect(polls.every((r) => r.input.protocolVersion === 3)).toBe(true);
+  expect(polls.at(-1)?.input).toMatchObject({ reason: 'API_OUTDATED', allowClaim: false });
+  // allowClaim is not latched off: once the API is updated the next poll claims normally.
+  state.apiOutdated = false;
+  await bridge.poll();
+  expect(state.executions).toBe(1);
+});
+it('bridge surfaces CLIENT_OUTDATED reason from the API', async () => {
+  const { bridge, state } = setup();
+  state.clientOutdated = true;
+  await bridge.poll();
+  expect(state.executions).toBe(0);
+  expect(state.requests.at(-1)?.input).toMatchObject({ reason: 'CLIENT_OUTDATED', allowClaim: false });
 });
