@@ -46,6 +46,7 @@ function setup() {
     acceptanceHung: false,
     apiOutdated: false,
     clientOutdated: false,
+    acceptRejected: false,
     tabs: [{ id: 5, windowId: 1, url: 'https://web.whatsapp.com/' }],
     requests: [] as { type: string; input: Record<string, unknown> }[],
   };
@@ -102,7 +103,13 @@ function setup() {
         return;
       }
       if (req.type === 'SEND_POLL' && state.clientOutdated) result = { command: null, reason: 'CLIENT_OUTDATED' };
-      else if (req.type === 'SEND_PROGRESS') {
+      else if (req.type === 'SEND_PROGRESS' && req.input.step === 'ACCEPTED') {
+        if (state.acceptRejected) {
+          queueMicrotask(() => bridge.receive({ id: req.id, type: 'ERROR', code: 'API_UNAVAILABLE' }));
+          return;
+        }
+        result = { ok: true, status: 'CLAIMED' };
+      } else if (req.type === 'SEND_PROGRESS') {
         state.phase = String(req.input.step);
         if (['CANCELLED', 'FAILED', 'SENT', 'UNKNOWN', 'DRAFTED'].includes(state.phase)) state.queued = false;
         result = { ok: true, status: state.phase };
@@ -303,4 +310,39 @@ it('bridge surfaces CLIENT_OUTDATED reason from the API', async () => {
   await bridge.poll();
   expect(state.executions).toBe(0);
   expect(state.requests.at(-1)?.input).toMatchObject({ reason: 'CLIENT_OUTDATED', allowClaim: false });
+});
+it('bridge reports ACCEPTED after tab acceptance', async () => {
+  const { bridge, state, command } = setup();
+  await bridge.poll();
+  const progress = state.requests.filter((r) => r.type === 'SEND_PROGRESS');
+  expect(progress).toHaveLength(1);
+  expect(progress[0]!.input).toMatchObject({ commandId: command.id, step: 'ACCEPTED', code: 'ACCEPTED' });
+  expect(state.cancels).toBe(0);
+  expect(bridge.busy).toBe(true);
+  bridge.disconnect();
+});
+it('does not report ACCEPTED when the tab never accepts', async () => {
+  vi.useFakeTimers();
+  const { bridge, state } = setup();
+  state.acceptanceHung = true;
+  const run = bridge.poll();
+  await vi.advanceTimersByTimeAsync(2000);
+  await run;
+  expect(state.requests.some((r) => r.type === 'SEND_PROGRESS')).toBe(false);
+  bridge.disconnect();
+});
+it('aborts local job when ACCEPTED is rejected', async () => {
+  const { bridge, state, command } = setup();
+  state.acceptRejected = true;
+  await bridge.poll();
+  expect(state.executions).toBe(1);
+  expect(state.cancels).toBe(1);
+  expect(bridge.busy).toBe(false);
+  state.acceptRejected = false;
+  state.queued = false;
+  await bridge.poll();
+  expect(state.requests.at(-1)?.input.activeCommand).toBeUndefined();
+  expect(state.executions).toBe(1);
+  expect(command.id).toBeTruthy();
+  bridge.disconnect();
 });

@@ -246,7 +246,7 @@ function queueSetup() {
   };
   const step = (
     command: { id: string; leaseToken: string },
-    value: 'WAITING_AUTO_SEND' | 'SENDING' | 'DRAFTED' | 'FAILED',
+    value: 'ACCEPTED' | 'WAITING_AUTO_SEND' | 'SENDING' | 'DRAFTED' | 'FAILED',
   ) =>
     s.repo.progress({
       extensionInstanceId: s.extensionInstanceId,
@@ -623,6 +623,109 @@ describe('extension send queue ordering and recovery', () => {
       }
       expect(q.repo.status(b)).toMatchObject({ position: 2, attempts: 0, mode: 'SUPERVISED' });
       expect(() => q.repo.status(randomUUID())).toThrow('COMMAND_NOT_FOUND');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('CLAIMED without ACCEPTED for 20001 ms is requeued with EXTENSION_NO_ACK and pauses', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create();
+      const command = q.poll().command!;
+      const claimedAt = q.status(a).updatedAt;
+      q.setTime(new Date(Date.parse(claimedAt) + 20000 - 1).toISOString());
+      q.repo.recover();
+      expect(q.status(a).status).toBe('CLAIMED');
+      q.setTime(new Date(Date.parse(claimedAt) + 20001).toISOString());
+      q.repo.recover();
+      expect(q.status(a)).toMatchObject({ status: 'QUEUED', leaseOwner: null, resultCode: 'EXTENSION_NO_ACK' });
+      expect(q.db.prepare('SELECT COUNT(*) n FROM wa_outbox_interface_lease').get()).toEqual({ n: 0 });
+      expect(q.repo.queue()).toMatchObject({ paused: true, pauseReason: 'INTERRUPTED' });
+      const codes = (
+        q.db
+          .prepare("SELECT json_extract(event_json,'$.code') code FROM wa_flow_logs WHERE resource_id=? AND component='SQLITE'")
+          .all(a) as { code: string }[]
+      ).map((row) => row.code);
+      expect(codes).toContain('EXTENSION_NO_ACK');
+      expect(() => q.step(command, 'ACCEPTED')).toThrow('SEND_LEASE_MISMATCH');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('ACCEPTED keeps CLAIMED and prevents no-ack requeue', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create();
+      const command = q.poll().command!;
+      expect(q.step(command, 'ACCEPTED')).toEqual({ ok: true, status: 'CLAIMED' });
+      const acceptedAt = (q.db.prepare('SELECT accepted_at FROM wa_outbox WHERE id=?').get(a) as { accepted_at: string }).accepted_at;
+      expect(acceptedAt).toBeTruthy();
+      q.setTime('2026-10-18T12:00:40.000Z');
+      expect(q.step(command, 'ACCEPTED')).toEqual({ ok: true, status: 'CLAIMED' });
+      expect(q.db.prepare('SELECT accepted_at FROM wa_outbox WHERE id=?').get(a)).toEqual({ accepted_at: acceptedAt });
+      q.repo.recover();
+      expect(q.status(a).status).toBe('CLAIMED');
+      const phases = (
+        q.db
+          .prepare("SELECT json_extract(event_json,'$.phase') phase FROM wa_flow_logs WHERE resource_id=? AND component='SQLITE'")
+          .all(a) as { phase: string }[]
+      ).map((row) => row.phase);
+      expect(phases).toContain('SEND_ACCEPTED');
+      expect(q.step(command, 'DRAFTED')).toEqual({ ok: true, status: 'DRAFTED' });
+    } finally {
+      q.db.close();
+    }
+  });
+  it('ACCEPTED after requeue is rejected and requeue clears accepted_at', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create();
+      const command = q.poll().command!;
+      q.step(command, 'ACCEPTED');
+      q.setTime('2026-10-18T12:05:00.000Z');
+      q.repo.recover(); // execution lease expiry requeues
+      expect(q.status(a).status).toBe('QUEUED');
+      expect(q.db.prepare('SELECT accepted_at FROM wa_outbox WHERE id=?').get(a)).toEqual({ accepted_at: null });
+      expect(() => q.step(command, 'ACCEPTED')).toThrow('SEND_LEASE_MISMATCH');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('SENDING is never touched by no-ack recovery', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create({ mode: 'AUTO', timing: { autoCountdownMs: 0 } });
+      const command = q.poll().command!;
+      q.step(command, 'WAITING_AUTO_SEND');
+      q.step(command, 'SENDING');
+      q.setTime(new Date(Date.parse(q.status(a).updatedAt) + 30000).toISOString());
+      q.repo.recover();
+      expect(q.status(a).status).toBe('SENDING');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('ACCEPTED is rejected outside CLAIMED', () => {
+    const q = queueSetup();
+    try {
+      q.create({ mode: 'AUTO', timing: { autoCountdownMs: 0 } });
+      const command = q.poll().command!;
+      q.step(command, 'WAITING_AUTO_SEND');
+      expect(() => q.step(command, 'ACCEPTED')).toThrow('SEND_STATE_CONFLICT');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('an outdated client poll still runs recovery', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create();
+      q.poll();
+      q.setTime('2026-10-18T12:01:00.000Z');
+      expect(
+        q.repo.poll({ protocolVersion: 2, extensionInstanceId: randomUUID(), identity: q.identity }),
+      ).toMatchObject({ reason: 'CLIENT_OUTDATED' });
+      expect(q.status(a)).toMatchObject({ status: 'QUEUED', resultCode: 'EXTENSION_NO_ACK' });
     } finally {
       q.db.close();
     }

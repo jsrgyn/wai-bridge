@@ -310,7 +310,7 @@ export class ExtensionSendBridge {
       const acknowledgement = await bounded(
         this.tabs.sendMessage(tab.id!, { kind: 'SEND_EXECUTE', command }),
       );
-      if (acknowledgement?.accepted)
+      if (acknowledgement?.accepted) {
         emitFlow(this.logs, {
           traceId: command.traceId ?? command.id,
           resourceId: command.id,
@@ -320,6 +320,8 @@ export class ExtensionSendBridge {
           code: 'ACCEPTED',
           build: extensionBuild,
         });
+        await this.confirmAccepted(instance, tab.id!, command);
+      }
       if (acknowledgement?.ok === false) {
         await this.progress(
           {
@@ -356,6 +358,44 @@ export class ExtensionSendBridge {
         ).catch(() => undefined);
     } finally {
       this.polling = false;
+    }
+  }
+  // Durable acceptance: without it the API requeues the claim. If the API does not
+  // confirm it (lease lost, state conflict, unreachable host), the local job is
+  // aborted before composing so a requeued request is never executed twice.
+  private async confirmAccepted(
+    instance: string,
+    tabId: number,
+    command: ExtensionSendCommand,
+  ): Promise<void> {
+    try {
+      ExtensionSendProgressResultSchema.parse(
+        await this.rpc(
+          'SEND_PROGRESS',
+          ExtensionSendProgressSchema.parse({
+            extensionInstanceId: instance,
+            commandId: command.id,
+            contextId: command.contextId,
+            leaseToken: command.leaseToken,
+            step: 'ACCEPTED',
+            code: 'ACCEPTED',
+          }),
+        ),
+      );
+    } catch (error) {
+      await bounded(
+        this.tabs.sendMessage(tabId, { kind: 'SEND_CANCEL', commandId: command.id }),
+      ).catch(() => undefined);
+      if (this.active?.command.id === command.id) this.active = undefined;
+      emitFlow(this.logs, {
+        traceId: command.traceId ?? command.id,
+        resourceId: command.id,
+        component: 'EXTENSION_BACKGROUND',
+        phase: 'CANCELLED',
+        outcome: 'CANCELLED',
+        code: flowCode(error),
+        build: extensionBuild,
+      });
     }
   }
   private rpc(type: 'SEND_POLL' | 'SEND_PROGRESS', input: unknown): Promise<unknown> {

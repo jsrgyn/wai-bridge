@@ -150,6 +150,7 @@ export const ExtensionSendCommandSchema = z
     'Unbound commands require phone resolution',
   );
 export const ExtensionSendStepSchema = z.enum([
+  'ACCEPTED',
   'WAITING_AUTO_SEND',
   'WAITING_USER',
   'SENDING',

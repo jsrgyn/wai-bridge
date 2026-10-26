@@ -23,6 +23,7 @@ import {
   ExtensionSendProgressSchema,
   ExtensionSendCommandSchema,
   SEND_PROTOCOL_VERSION,
+  SEND_ACCEPT_TIMEOUT_MS,
   SendTargetSchema,
   sendTarget,
 } from '@wai-bridge/shared';
@@ -259,6 +260,13 @@ export class ExtensionSendRepository {
       )
       .all(at) as { id: string }[];
     for (const { id } of expired) this.interrupt(this.outbox.get(id)!, 'EXTENSION_LEASE_EXPIRED');
+    // A claim the extension never acknowledged was not delivered: requeue it (never past CLAIMED).
+    const unacknowledged = this.db
+      .prepare(
+        "SELECT id FROM wa_outbox WHERE kind='extension-send' AND status='CLAIMED' AND accepted_at IS NULL AND updated_at<=?",
+      )
+      .all(new Date(Date.parse(at) - SEND_ACCEPT_TIMEOUT_MS).toISOString()) as { id: string }[];
+    for (const { id } of unacknowledged) this.interrupt(this.outbox.get(id)!, 'EXTENSION_NO_ACK');
     const pending = this.db
       .prepare(
         "SELECT id,status,created_at,timing_json,payload_json FROM wa_outbox WHERE kind='extension-send' AND status IN ('REQUESTED','QUEUED','WAITING_WHATSAPP')",
@@ -294,12 +302,16 @@ export class ExtensionSendRepository {
     }
   }
   /** Lease lost before the click: requeue in place and pause; after the click: UNKNOWN, never resent. */
-  private interrupt(item: OutboxCommand, code: 'EXTENSION_LEASE_EXPIRED' | 'EXTENSION_ORPHANED') {
+  private interrupt(
+    item: OutboxCommand,
+    code: 'EXTENSION_LEASE_EXPIRED' | 'EXTENSION_ORPHANED' | 'EXTENSION_NO_ACK',
+  ) {
     const at = this.now();
     const sending = item.status === 'SENDING';
     const requeue = executing.includes(item.status);
     const next: OutboxStatus = sending ? 'UNKNOWN' : requeue ? 'QUEUED' : 'FAILED';
-    const reason = requeue ? 'EXTENSION_INTERRUPTED_REQUEUED' : code;
+    const reason =
+      requeue && code !== 'EXTENSION_NO_ACK' ? 'EXTENSION_INTERRUPTED_REQUEUED' : code;
     this.outbox.transition(item.id, item.status, next, 'extension-recovery', at, reason, {
       leaseOwner: null,
       leaseUntil: null,
@@ -307,6 +319,7 @@ export class ExtensionSendRepository {
       resultCode: reason,
     });
     if (item.leaseOwner) this.outbox.releaseInterfaceLease(item.leaseOwner, item.id);
+    if (requeue) this.db.prepare('UPDATE wa_outbox SET accepted_at=NULL WHERE id=?').run(item.id);
     if (requeue)
       this.db
         .prepare(
@@ -327,6 +340,8 @@ export class ExtensionSendRepository {
     const input = ExtensionSendPollSchema.parse(raw);
     return this.db
       .transaction(() => {
+        // Stale leases expire even when only an outdated client is polling.
+        this.recover();
         if (input.protocolVersion !== SEND_PROTOCOL_VERSION) {
           // An outdated client cannot parse current commands: never claim, never
           // mutate the queue, only surface the mismatch in the bridge heartbeat.
@@ -350,7 +365,6 @@ export class ExtensionSendRepository {
             );
           return { command: null, reason: 'CLIENT_OUTDATED' as const };
         }
-        this.recover();
         const active = input.activeCommand ? this.outbox.get(input.activeCommand.id) : undefined;
         if (
           input.activeCommand &&
@@ -517,6 +531,26 @@ export class ExtensionSendRepository {
         const owner = `${input.extensionInstanceId}:${input.contextId}:${input.leaseToken}`;
         // Retain lease owner on terminal records for authenticated, idempotent ACK retries.
         if (item.leaseOwner !== owner) throw new Error('SEND_LEASE_MISMATCH');
+        if (input.step === 'ACCEPTED') {
+          // Delivery acknowledgement: durable, idempotent, never changes status.
+          if (item.status !== 'CLAIMED' || !item.leaseUntil || item.leaseUntil <= this.now())
+            throw new Error('SEND_STATE_CONFLICT');
+          const changed = this.db
+            .prepare(
+              "UPDATE wa_outbox SET accepted_at=? WHERE id=? AND status='CLAIMED' AND accepted_at IS NULL",
+            )
+            .run(this.now(), item.id).changes;
+          if (changed)
+            new FlowLogRepository(this.db).record({
+              traceId: this.traceFor(item.id),
+              resourceId: item.id,
+              component: 'SQLITE',
+              phase: 'SEND_ACCEPTED',
+              outcome: 'SUCCEEDED',
+              code: 'ACCEPTED',
+            });
+          return { ok: true as const, status: item.status };
+        }
         if (item.status === input.step) return { ok: true as const, status: item.status };
         if (terminal.includes(item.status) || !item.leaseUntil || item.leaseUntil <= this.now())
           throw new Error('SEND_STATE_CONFLICT');
