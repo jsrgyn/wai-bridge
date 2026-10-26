@@ -58,7 +58,7 @@ it.each(
   });
   const list = await app.inject({ method: 'GET', url: '/api/conversations', headers });
   const conversationId = list.json().items[0].id;
-  if(direct)await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers,payload:{extensionInstanceId,identity,allowClaim:true}});
+  if(direct)await app.inject({method:'POST',url:'/api/extension/outbox/poll',headers,payload:{extensionInstanceId,identity,allowClaim:true,protocolVersion:3}});
   const created = await app.inject({
     method: 'POST',
     url: direct?'/api/extension/outbox/phone':'/api/extension/outbox',
@@ -130,7 +130,7 @@ it.each(
     const pollIdentity=locateByPhone?{...identity,phone:'+12025550124',contextId:randomUUID()}:identity;
     const response = await send({
       type: 'SEND_POLL',
-      input: { extensionInstanceId, identity:pollIdentity },
+      input: { extensionInstanceId, identity:pollIdentity, protocolVersion: 3 },
     } as Omit<NativeRequest, 'version' | 'id'>);
     expect(response.type).toBe('SEND_POLL_RESULT');
     if (response.type !== 'SEND_POLL_RESULT' || !response.result.command)
@@ -145,7 +145,7 @@ it.each(
       appendToDraft: false,
     });
     if (auto) expect(command.timing.autoCountdownMs).toBe(0);
-    const progress = (step: 'WAITING_USER' | 'WAITING_AUTO_SEND' | 'SENDING' | 'SENT' | 'DRAFTED') =>
+    const progress = (step: 'ACCEPTED' | 'WAITING_USER' | 'WAITING_AUTO_SEND' | 'SENDING' | 'SENT' | 'DRAFTED') =>
       send({
         type: 'SEND_PROGRESS',
         input: {
@@ -155,7 +155,7 @@ it.each(
           leaseToken: command.leaseToken,
           step,
           code: 'SYNTHETIC_NATIVE_STEP',
-          ...(locateByPhone && step !== 'SENDING' && step !== 'SENT' ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
+          ...(locateByPhone && !['ACCEPTED', 'SENDING', 'SENT'].includes(step) ? {resolvedIdentity:{...identity,phone:command.recipientPhone!,contextId:randomUUID()},conversationLabel:'Synthetic resolved contact'} : {}),
           ...(step === 'SENT' ? { evidence: `visible-outbound:${'b'.repeat(64)}` } : {}),
         },
       } as Omit<NativeRequest, 'version' | 'id'>);
@@ -164,6 +164,12 @@ it.each(
     expect(
       db.prepare('SELECT status FROM wa_outbox WHERE id=?').get(command.id),
     ).toEqual({ status: 'CLAIMED' });
+    // Acceptance is durable and idempotent; it never advances the status.
+    for (let i = 0; i < 2; i++)
+      expect(await progress('ACCEPTED')).toMatchObject({
+        type: 'SEND_PROGRESS_RESULT',
+        result: { ok: true, status: 'CLAIMED' },
+      });
     for (const step of auto ? (['WAITING_AUTO_SEND', 'SENDING', 'SENT'] as const) : (['DRAFTED'] as const)) {
       const result = await progress(step);
       expect(result).toMatchObject({

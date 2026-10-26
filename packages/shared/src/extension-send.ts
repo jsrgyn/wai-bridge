@@ -5,6 +5,10 @@ import {
   type ConversationIdentity,
 } from './conversation-identity.js';
 
+/** Wire protocol between extension, native host and Local API for extension sends. */
+export const SEND_PROTOCOL_VERSION = 3 as const;
+/** Maximum wait for the content script to accept a delivered command. */
+export const SEND_ACCEPT_TIMEOUT_MS = 20000;
 export const SendTargetSchema = z
   .object({
     accountId: z.uuid(),
@@ -96,6 +100,8 @@ export const SendBridgeReasonSchema = z.enum([
   'AMBIGUOUS_TABS',
   'SEND_DISABLED',
   'EXECUTING',
+  'API_OUTDATED',
+  'CLIENT_OUTDATED',
 ]);
 export const ExtensionSendPollSchema = z
   .object({
@@ -105,7 +111,7 @@ export const ExtensionSendPollSchema = z
     visible: z.boolean().optional(),
     identity: ConversationIdentitySchema.optional(),
     reason: SendBridgeReasonSchema.optional(),
-    protocolVersion: z.literal(2).optional(),
+    protocolVersion: z.union([z.literal(2), z.literal(3)]).optional(),
     clientBuild: z.string().max(64).optional(),
     activeCommand: z
       .object({ id: z.uuid(), contextId: z.uuid(), leaseToken: z.uuid() })
@@ -144,6 +150,7 @@ export const ExtensionSendCommandSchema = z
     'Unbound commands require phone resolution',
   );
 export const ExtensionSendStepSchema = z.enum([
+  'ACCEPTED',
   'WAITING_AUTO_SEND',
   'WAITING_USER',
   'SENDING',
@@ -195,6 +202,7 @@ export const ExtensionSendPollResultSchema = z
     activeStatus: ExtensionSendQueueStatusSchema.or(z.literal('REQUESTED'))
       .or(z.literal('WAITING_USER'))
       .optional(),
+    reason: z.literal('CLIENT_OUTDATED').optional(),
   })
   .strict();
 export const ExtensionSendProgressResultSchema = z

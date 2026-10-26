@@ -136,6 +136,32 @@ describe('local REST API', () => {
       (await app.inject({ method: 'GET', url: '/api/status', headers: auth() })).json().database,
     ).toBe('connected');
   });
+  it('status reports sendProtocolVersion and compatible false for protocol 2 bridge', async () => {
+    const { app } = setup();
+    const status = async () =>
+      (await app.inject({ method: 'GET', url: '/api/status', headers: auth() })).json();
+    expect(await status()).toMatchObject({
+      sendProtocolVersion: 3,
+      extension: { compatible: false, bridge: 'UNSEEN' },
+    });
+    const poll = (protocolVersion: 2 | 3) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/extension/outbox/poll',
+        headers: auth(),
+        payload: {
+          extensionInstanceId: '55555555-5555-4555-8555-555555555555',
+          allowClaim: true,
+          protocolVersion,
+        },
+      });
+    expect((await poll(2)).statusCode).toBe(200);
+    expect(await status()).toMatchObject({
+      extension: { compatible: false, bridge: 'CLIENT_OUTDATED', protocolVersion: 2 },
+    });
+    expect((await poll(3)).statusCode).toBe(200);
+    expect((await status()).extension.compatible).toBe(true);
+  });
   it('authenticates and persists macOS extension connection state', async () => {
     const { app, db } = setup();
     const extensionInstanceId = '66666666-6666-4666-8666-666666666666';
@@ -585,7 +611,11 @@ describe('local REST API', () => {
   });
   it('serves extension send queue, status and send settings with validation', async () => {
     const { app } = setup();
-    const queue = await app.inject({ method: 'GET', url: '/api/extension/outbox/queue', headers: auth() });
+    const queue = await app.inject({
+      method: 'GET',
+      url: '/api/extension/outbox/queue',
+      headers: auth(),
+    });
     expect(queue.statusCode).toBe(200);
     expect(queue.json()).toMatchObject({ paused: false, items: [] });
     const identity = {
@@ -602,7 +632,12 @@ describe('local REST API', () => {
       method: 'POST',
       url: '/api/extension/outbox/poll',
       headers: auth(),
-      payload: { extensionInstanceId: randomUUID(), identity, allowClaim: true },
+      payload: {
+        extensionInstanceId: randomUUID(),
+        identity,
+        allowClaim: true,
+        protocolVersion: 3,
+      },
     });
     expect(poll.statusCode).toBe(200);
     const create = async (n: number, timing?: object) =>
@@ -656,7 +691,11 @@ describe('local REST API', () => {
     });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().autoCountdownMs).toBe(0);
-    const got = await app.inject({ method: 'GET', url: '/api/extension/send-settings', headers: auth() });
+    const got = await app.inject({
+      method: 'GET',
+      url: '/api/extension/send-settings',
+      headers: auth(),
+    });
     expect(got.json().autoCountdownMs).toBe(0);
     const badCreate = await app.inject({
       method: 'POST',

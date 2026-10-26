@@ -61,11 +61,11 @@ describe('SendSettingsRepository', () => {
       db.close();
     }
   });
-  it('schema version is 17', () => {
+  it('schema version is 18', () => {
     const db = openDatabase(':memory:');
     try {
-      expect(db.prepare('SELECT max(version) v FROM wa_schema_migrations').get()).toEqual({ v: 17 });
-      expect(migrations.at(-1)?.name).toBe('send-queue');
+      expect(db.prepare('SELECT max(version) v FROM wa_schema_migrations').get()).toEqual({ v: 18 });
+      expect(migrations.at(-1)?.name).toBe('send-accept');
     } finally {
       db.close();
     }

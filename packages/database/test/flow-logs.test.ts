@@ -106,7 +106,7 @@ it('keeps the original trace across idempotent retries and propagates it in a co
       confirmedAt: new Date().toISOString(),
     };
     const instance = randomUUID();
-    repo.poll({ extensionInstanceId: instance, identity });
+    repo.poll({ protocolVersion: 3, extensionInstanceId: instance, identity });
     const request = {
       phoneNumber: identity.phone,
       text: 'SYNTHETIC_PRIVATE_TEXT',
@@ -121,7 +121,7 @@ it('keeps the original trace across idempotent retries and propagates it in a co
     );
     expect(replay.traceId).toBe(traceId);
     expect(replay.id).toBe(first.id);
-    const command = repo.poll({ extensionInstanceId: instance, identity }).command!;
+    const command = repo.poll({ protocolVersion: 3, extensionInstanceId: instance, identity }).command!;
     expect(command.traceId).toBe(traceId);
     const logs = new FlowLogRepository(db).list({ resourceId: first.id });
     expect(logs.resolvedTraceId).toBe(traceId);
@@ -147,7 +147,7 @@ it('continues durable command transitions when diagnostic persistence fails', ()
       confirmedAt: new Date().toISOString(),
     };
     const extensionInstanceId = randomUUID();
-    repo.poll({ extensionInstanceId, identity });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity });
     const conversation = (db.prepare('SELECT id FROM wa_conversations').get() as { id: string }).id;
     const created = repo.create(
       {
@@ -160,7 +160,7 @@ it('continues durable command transitions when diagnostic persistence fails', ()
       'synthetic-log-failure-key',
     );
     db.exec('DROP TABLE wa_flow_logs');
-    const command = repo.poll({ extensionInstanceId, identity }).command!;
+    const command = repo.poll({ protocolVersion: 3, extensionInstanceId, identity }).command!;
     const base = {
       extensionInstanceId,
       commandId: created.id,

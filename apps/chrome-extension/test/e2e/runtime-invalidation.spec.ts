@@ -169,6 +169,17 @@ test('reload mid-request: bridge drops active, next poll omits activeCommand, th
     postMessage: (raw) => {
       const req = raw as { id: string; type: string; input: Record<string, unknown> & { activeCommand?: unknown; ready?: unknown; allowClaim?: unknown } };
       requests.push(req);
+      if (req.type === 'SEND_PROGRESS') {
+        // Durable ACCEPTED confirmation (protocol 3): the API acknowledges it.
+        queueMicrotask(() =>
+          bridge.receive({
+            id: req.id,
+            type: 'SEND_PROGRESS_RESULT',
+            result: { ok: true, status: 'CLAIMED' },
+          }),
+        );
+        return;
+      }
       let result: unknown = { command: null };
       if (req.input.activeCommand) result = { command: null, activeStatus: 'WAITING_AUTO_SEND' };
       else if (req.input.ready && command) result = { command };

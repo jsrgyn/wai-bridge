@@ -226,6 +226,27 @@ describe('MCP server', () => {
     expect(JSON.stringify(response.content)).not.toContain('SENT');
   });
 
+  it('status passes compatible through', async () => {
+    const payload = {
+      status: 'ok',
+      sendProtocolVersion: 3,
+      schemaVersion: 18,
+      extension: { compatible: false, bridge: 'CLIENT_OUTDATED' },
+    };
+    const fetchImpl = vi.fn(async () => Response.json(payload)) as typeof fetch;
+    const client = await connect(harness(fetchImpl).server);
+    const tools = (await client.listTools()).tools;
+    const description = tools.find((tool) => tool.name === 'whatsapp_status')?.description ?? '';
+    expect(description).toContain('compatible');
+    expect(description).toContain('restart-local-services.sh');
+    const response = await client.callTool({ name: 'whatsapp_status', arguments: {} });
+    const text = (response.content as { text: string }[])[0]!.text;
+    expect(JSON.parse(text)).toMatchObject({
+      sendProtocolVersion: 3,
+      extension: { compatible: false },
+    });
+  });
+
   it('blocks writes unless enabled, preserves idempotency and never reports a send as executed', async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('idempotency-key')).toBe(IDEMPOTENCY_KEY);

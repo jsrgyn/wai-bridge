@@ -62,3 +62,16 @@ envie ou apague o rascunho e peça de novo. Não repetir UNKNOWN.
 Nova ponte responde aceitação sem segurar o canal, continua
 consultando cancelamento e não depende de a aba WhatsApp já estar selecionada.
 Não usar automação externa da IA para contornar a extensão.
+
+## Envio: pedido preso em `CLAIMED` e incompatibilidade de versões
+
+Causa comum: o código foi atualizado sem reiniciar a Local API (ADR 0025). Primeiro rode `scripts/restart-local-services.sh --check`; se imprimir "reinício necessário", rode `scripts/restart-local-services.sh`, recarregue a extensão e a aba do WhatsApp Web e reinicie o cliente MCP.
+
+| Sintoma / código | Significado e ação |
+| --- | --- |
+| Pedido preso em `CLAIMED` | A API antiga reivindicou o pedido, mas a extensão não executou. Rode `--check` e reinicie. Com a API atual, `CLAIMED` sem aceite por 20 s volta a `QUEUED` (`EXTENSION_NO_ACK`); o lease expirado antes de `SENDING` também reenfileira. |
+| `API_OUTDATED` | O agente macOS ou o painel recebeu de uma API anterior uma resposta incompatível com o protocolo 3. Uma API antiga costuma responder `400 VALIDATION_ERROR` ao poll de protocolo 3, mapeado para `API_OUTDATED`; o flow log `API_CONTRACT_MISMATCH` só aparece quando o formato da resposta do poll é incompatível. Visível nos logs do agente e da extensão e no aviso do painel; não é gravado no pedido. Reinicie a API com o script. |
+| `CLIENT_OUTDATED` | A API recusou o poll porque o agente macOS (native host) ou a extensão está desatualizado (protocolo diferente do 3). Nenhum pedido é reivindicado. Rode `pnpm build`, reinicie ou reinstale o native host (fechar o Chrome ou recarregar a extensão o reinicia), recarregue a extensão em `chrome://extensions` e a aba do WhatsApp Web. Jobs em andamento de um cliente desatualizado após uma atualização são reenfileirados ou marcados `UNKNOWN`, pois o lease não é renovado em polls `CLIENT_OUTDATED`. |
+| `API_UNAVAILABLE` / `CONTENT_UNREACHABLE` com API saudável | API nova e extensão nova com agente macOS antigo: o host antigo rejeita localmente o poll de protocolo 3 (ou o campo novo `reason`), e a extensão só vê `API_UNAVAILABLE` ou `CONTENT_UNREACHABLE` enquanto a API responde normalmente. Em `/api/status` a ponte aparece `STALE`/`UNSEEN`. Rode `pnpm build`, reinicie ou reinstale o native host (fechar o Chrome ou recarregar a extensão o reinicia), recarregue a extensão e a aba do WhatsApp Web. |
+| `EXTENSION_NO_ACK` | A extensão não confirmou `ACCEPTED` em 20 s; o pedido voltou a `QUEUED` e a fila foi pausada só até o próximo poll READY (segundos). Se o aceite continuar falhando, o mesmo pedido repete o ciclo `CLAIMED` → 20 s → `QUEUED`, registrando `EXTENSION_NO_ACK` a cada volta; cancele-o pelo painel se repetir. Confira se a aba está aberta, o contexto da extensão não foi invalidado e o agente macOS está em execução. |
+| Painel com `NOT_FOUND` / "API local desatualizada" | Rotas novas ausentes na API em execução. Reinicie a API com o script. |

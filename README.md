@@ -54,6 +54,17 @@ pnpm --filter @wai-bridge/chrome-extension lint
 
 `pnpm build` compila todos os pacotes e grava a extensão descompactada em `apps/chrome-extension/dist/`.
 
+## Atualizar e reiniciar os serviços locais
+
+Depois de atualizar o código (pull, troca de branch, rebuild), **rode `scripts/restart-local-services.sh`**. A Local API gerenciada pelo launchd continua executando o build antigo, e o banco continua no schema antigo, até ser reiniciada; a extensão e o agente macOS novos passam então a falar com uma API antiga (ver [ADR 0025](.ai/decisions/0025-send-protocol-version-and-accept.md)).
+
+```sh
+scripts/restart-local-services.sh --check   # somente leitura; sai 1 com "reinício necessário" se divergente
+scripts/restart-local-services.sh           # build, backup verificado, reinício pelo launchd e confirmação do schema
+```
+
+Ao final, recarregue a extensão em `chrome://extensions`, recarregue a aba do WhatsApp Web e reinicie o cliente MCP. Detalhes em `docs/operations/extension-sending.md` e `docs/operations/troubleshooting.md`.
+
 ## Carregar e configurar a extensão no Chrome
 
 1. Compile o projeto com `pnpm build`.

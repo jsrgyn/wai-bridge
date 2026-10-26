@@ -36,7 +36,7 @@ function setup() {
 it('persists a request to a new phone without fabricating a verified contact or conversation', () => {
   const { db, repo, identity, extensionInstanceId, request } = setup();
   try {
-    repo.poll({ extensionInstanceId, identity });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity });
     const before = db.prepare('SELECT count(*) n FROM wa_conversation_identities').get();
     const created = repo.createToNumber(request, 'synthetic-direct-number-key');
     expect(created.status).toBe('QUEUED');
@@ -44,7 +44,7 @@ it('persists a request to a new phone without fabricating a verified contact or 
     expect(
       db.prepare('SELECT count(*) n FROM wa_contacts WHERE phone_number IS NOT NULL').get(),
     ).toEqual({ n: 0 });
-    const command = repo.poll({ extensionInstanceId, identity }).command!;
+    const command = repo.poll({ protocolVersion: 3, extensionInstanceId, identity }).command!;
     expect(command).toMatchObject({
       id: created.id,
       locateByPhone: true,
@@ -60,7 +60,7 @@ it('persists a request to a new phone without fabricating a verified contact or 
 it('replays normalized requests after context expiry without rebinding accounts or creating another send', () => {
   const { db, repo, identity, extensionInstanceId, request, setTime } = setup();
   try {
-    repo.poll({ extensionInstanceId, identity });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity });
     const created = repo.createToNumber(request, 'synthetic-direct-replay-key');
     setTime('2026-10-18T12:01:00.000Z');
     expect(
@@ -86,13 +86,13 @@ it('requires one fresh opted-in account and never guesses international prefixes
     expect(() => repo.createToNumber(request, 'synthetic-no-active-account')).toThrow(
       'ACTIVE_SEND_ACCOUNT_REQUIRED',
     );
-    repo.poll({ extensionInstanceId, identity, allowClaim: false });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity, allowClaim: false });
     expect(() => repo.createToNumber(request, 'synthetic-disabled-account')).toThrow(
       'ACTIVE_SEND_ACCOUNT_REQUIRED',
     );
-    repo.poll({ extensionInstanceId, identity });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity });
     const second = { ...identity, accountId: randomUUID() };
-    repo.poll({ extensionInstanceId: randomUUID(), identity: second });
+    repo.poll({ protocolVersion: 3, extensionInstanceId: randomUUID(), identity: second });
     expect(() => repo.createToNumber(request, 'synthetic-ambiguous-account')).toThrow(
       'AMBIGUOUS_SEND_ACCOUNT',
     );
@@ -126,10 +126,10 @@ it('requires one fresh opted-in account and never guesses international prefixes
 it('queues while the tab is hidden, then registers the proven new contact before send authorization', () => {
   const { db, repo, identity, extensionInstanceId, request } = setup();
   try {
-    repo.poll({ extensionInstanceId, identity, ready: false });
+    repo.poll({ protocolVersion: 3, extensionInstanceId, identity, ready: false });
     const created = repo.createToNumber(request, 'synthetic-hidden-then-visible');
-    expect(repo.poll({ extensionInstanceId, identity, ready: false }).command).toBeNull();
-    const command = repo.poll({ extensionInstanceId, identity, ready: true }).command!;
+    expect(repo.poll({ protocolVersion: 3, extensionInstanceId, identity, ready: false }).command).toBeNull();
+    const command = repo.poll({ protocolVersion: 3, extensionInstanceId, identity, ready: true }).command!;
     const step = {
       extensionInstanceId,
       commandId: created.id,
@@ -170,7 +170,7 @@ it('queues while the tab is hidden, then registers the proven new contact before
 it('resolves names in the active account, rejects ambiguity and replays the original intent after rename/expiry', () => {
   const { db, repo, identity, extensionInstanceId, setTime } = setup();
   try {
-    repo.poll({
+    repo.poll({ protocolVersion: 3,
       extensionInstanceId,
       identity: { ...identity, phone: '+12025550199' },
       conversationLabel: 'Synthetic Espósa Person',
@@ -181,10 +181,10 @@ it('resolves names in the active account, rejects ambiguity and replays the orig
       explicitAuthorization: true,
     };
     const created = repo.createToName(request, 'synthetic-by-name-request');
-    expect(repo.poll({ extensionInstanceId, identity }).command?.recipientPhone).toBe(
+    expect(repo.poll({ protocolVersion: 3, extensionInstanceId, identity }).command?.recipientPhone).toBe(
       '+12025550199',
     );
-    repo.poll({
+    repo.poll({ protocolVersion: 3,
       extensionInstanceId,
       identity: {
         ...identity,
@@ -200,7 +200,7 @@ it('resolves names in the active account, rejects ambiguity and replays the orig
     expect(() =>
       repo.createToName({ ...request, recipientName: 'missing' }, 'synthetic-missing-name'),
     ).toThrow('RECIPIENT_NAME_NOT_FOUND');
-    repo.poll({
+    repo.poll({ protocolVersion: 3,
       extensionInstanceId,
       identity: { ...identity, conversationKey: randomUUID(), contextId: randomUUID() },
       conversationLabel: 'Synthetic no phone',
@@ -231,7 +231,7 @@ it('advertises a hidden pending intent and supervises cancellation using the ori
       identity,
       ready: false,
       reason: 'TAB_HIDDEN',
-      protocolVersion: 2,
+      protocolVersion: 3,
     });
     const created = repo.createToNumber(request, 'synthetic-responsive-delivery');
     expect(
@@ -240,23 +240,23 @@ it('advertises a hidden pending intent and supervises cancellation using the ori
         identity,
         ready: false,
         reason: 'TAB_HIDDEN',
-        protocolVersion: 2,
+        protocolVersion: 3,
       }),
     ).toEqual({ command: null, pending: true });
     expect(repo.diagnostics()).toMatchObject({
       bridge: 'TAB_HIDDEN',
-      protocolVersion: 2,
+      protocolVersion: 3,
       ready: false,
       queue: [{ status: 'WAITING_WHATSAPP', count: 1 }],
     });
-    const command = repo.poll({ extensionInstanceId, identity, ready: true }).command!;
+    const command = repo.poll({ protocolVersion: 3, extensionInstanceId, identity, ready: true }).command!;
     const activeCommand = {
       id: command.id,
       contextId: command.contextId,
       leaseToken: command.leaseToken,
     };
     expect(
-      repo.poll({
+      repo.poll({ protocolVersion: 3,
         extensionInstanceId,
         identity,
         activeCommand,
@@ -265,14 +265,14 @@ it('advertises a hidden pending intent and supervises cancellation using the ori
       }),
     ).toMatchObject({ command: null, activeStatus: 'CLAIMED' });
     expect(() =>
-      repo.poll({
+      repo.poll({ protocolVersion: 3,
         extensionInstanceId,
         identity,
         activeCommand: { ...activeCommand, leaseToken: randomUUID() },
       }),
     ).toThrow('SEND_LEASE_MISMATCH');
     repo.cancel(created.id);
-    expect(repo.poll({ extensionInstanceId, identity, activeCommand, ready: false })).toMatchObject(
+    expect(repo.poll({ protocolVersion: 3, extensionInstanceId, identity, activeCommand, ready: false })).toMatchObject(
       { command: null, activeStatus: 'CANCELLED' },
     );
     expect(db.prepare('SELECT attempt_count FROM wa_outbox WHERE id=?').get(created.id)).toEqual({
@@ -283,7 +283,7 @@ it('advertises a hidden pending intent and supervises cancellation using the ori
       allowClaim: false,
       ready: false,
       reason: 'CONTENT_UNREACHABLE',
-      protocolVersion: 2,
+      protocolVersion: 3,
     });
     expect(repo.diagnostics()).toMatchObject({
       bridge: 'CONTENT_UNREACHABLE',
@@ -304,7 +304,7 @@ it('does not silently choose the last account when one extension instance monito
       ready: false,
       visible: true,
       reason: 'READY',
-      protocolVersion: 2,
+      protocolVersion: 3,
       clientBuild: 'synthetic-build',
     });
     repo.poll({
@@ -313,7 +313,7 @@ it('does not silently choose the last account when one extension instance monito
       ready: false,
       visible: true,
       reason: 'READY',
-      protocolVersion: 2,
+      protocolVersion: 3,
       clientBuild: 'synthetic-build',
     });
     expect(() => repo.createToNumber(request, 'synthetic-same-instance-accounts')).toThrow(
@@ -329,7 +329,7 @@ it('does not silently choose the last account when one extension instance monito
       allowClaim: false,
       ready: false,
       reason: 'NO_MONITORED_CONTEXT',
-      protocolVersion: 2,
+      protocolVersion: 3,
       clientBuild: 'synthetic-build',
     });
     expect(() => repo.createToNumber(request, 'synthetic-context-revoked')).toThrow(

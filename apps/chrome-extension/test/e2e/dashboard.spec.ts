@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const html = await readFile(resolve('dist/dashboard.html'), 'utf8');
 const id = '11111111-1111-4111-8111-111111111111';
-async function setup(page: Page) {
+async function setup(page: Page, outdated = false) {
   await page.route('https://dashboard.test/**', (route) => {
     const name = new URL(route.request().url()).pathname.slice(1) || 'dashboard.html';
     return name === 'dashboard.html'
@@ -13,7 +13,7 @@ async function setup(page: Page) {
           contentType: name.endsWith('.js') ? 'application/javascript' : 'text/css',
         });
   });
-  await page.addInitScript(() => {
+  await page.addInitScript((outdated) => {
     const calls: unknown[] = [];
     (globalThis as unknown as { dashboardCalls: unknown[] }).dashboardCalls = calls;
     const id = '11111111-1111-4111-8111-111111111111';
@@ -68,11 +68,32 @@ async function setup(page: Page) {
       postMessage: (message: { requestId: string; input: Record<string, unknown> }) => {
         calls.push(message.input);
         const input = message.input;
+        if (outdated && String(input.operation).startsWith('SEND_')) {
+          listeners.forEach((listener) =>
+            listener({ requestId: message.requestId, error: 'NOT_FOUND' }),
+          );
+          return;
+        }
         let result: unknown;
         switch (input.operation) {
           case 'SUMMARY':
             result = {
-              data: { batches: [{ id, status: 'PAUSED' }], coverageComplete: false },
+              data: {
+                batches: [{ id, status: 'PAUSED' }],
+                coverageComplete: false,
+                runtime: outdated
+                  ? {
+                      status: 'ok',
+                      schemaVersion: 17,
+                      extension: { bridge: 'API_OUTDATED', build: 'synthetic-build-1' },
+                    }
+                  : {
+                      status: 'ok',
+                      schemaVersion: 18,
+                      sendProtocolVersion: 3,
+                      extension: { bridge: 'READY', build: 'synthetic-build-1', compatible: true },
+                    },
+              },
               extension: { queue: { pending: 2 } },
             };
             break;
@@ -141,7 +162,7 @@ async function setup(page: Page) {
       onDisconnect: { addListener: () => {} },
     };
     Object.assign(globalThis, { chrome: { runtime: { connect: () => port } } });
-  });
+  }, outdated);
   await page.goto('https://dashboard.test/');
   await expect(page.locator('#status')).toHaveText('Operação concluída.');
 }
@@ -277,4 +298,27 @@ test('shows queue positions, paused banner and cancels a queued item', async ({ 
   expect((await callsOf(page)).filter((c) => c.operation === 'SEND_CANCEL')).toEqual([
     { operation: 'SEND_CANCEL', id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2' },
   ]);
+});
+test('404 on send ops shows outdated API banner and keeps other sections', async ({ page }) => {
+  await setup(page, true);
+  await expect(page.locator('#api-outdated')).toBeVisible();
+  await expect(page.locator('#api-outdated')).toHaveText(
+    'API local desatualizada: reinicie o serviço (scripts/restart-local-services.sh)',
+  );
+  await expect(page.locator('#diagnostics')).toContainText('Schema: 17');
+  await expect(page.locator('#diagnostics')).toContainText(
+    'Protocolo de envio da API: desconhecido',
+  );
+  await expect(page.locator('#diagnostics')).toContainText('Build da extensão: synthetic-build-1');
+  await expect(page.locator('#diagnostics')).toContainText('API local desatualizada');
+  await expect(page.locator('#batches button')).toHaveCount(1);
+  await expect(page.locator('#maintenance')).toBeAttached();
+  expect((await callsOf(page)).some((c) => c.operation === 'MAINTENANCE_GET')).toBe(true);
+});
+test('shows schema, send protocol and build when API is current', async ({ page }) => {
+  await setup(page);
+  await expect(page.locator('#api-outdated')).toBeHidden();
+  await expect(page.locator('#diagnostics')).toContainText('Schema: 18');
+  await expect(page.locator('#diagnostics')).toContainText('Protocolo de envio da API: 3');
+  await expect(page.locator('#diagnostics')).toContainText('Compatível: sim');
 });
