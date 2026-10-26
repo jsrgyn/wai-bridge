@@ -705,13 +705,31 @@ describe('extension send queue ordering and recovery', () => {
       q.db.close();
     }
   });
-  it('ACCEPTED is rejected outside CLAIMED', () => {
+  it('same-lease ACCEPTED after a later step is an ok no-op; other lease rejected', () => {
     const q = queueSetup();
     try {
-      q.create({ mode: 'AUTO', timing: { autoCountdownMs: 0 } });
+      const a = q.create({ mode: 'AUTO', timing: { autoCountdownMs: 0 } });
       const command = q.poll().command!;
       q.step(command, 'WAITING_AUTO_SEND');
-      expect(() => q.step(command, 'ACCEPTED')).toThrow('SEND_STATE_CONFLICT');
+      expect(q.step(command, 'ACCEPTED')).toEqual({ ok: true, status: 'WAITING_AUTO_SEND' });
+      expect(q.status(a).status).toBe('WAITING_AUTO_SEND');
+      q.step(command, 'SENDING');
+      expect(q.step(command, 'ACCEPTED')).toEqual({ ok: true, status: 'SENDING' });
+      expect(q.status(a).status).toBe('SENDING');
+      expect(() => q.step({ ...command, leaseToken: randomUUID() }, 'ACCEPTED')).toThrow('SEND_LEASE_MISMATCH');
+    } finally {
+      q.db.close();
+    }
+  });
+  it('same-lease ACCEPTED after DRAFTED is an ok no-op', () => {
+    const q = queueSetup();
+    try {
+      const a = q.create();
+      const command = q.poll().command!;
+      q.step(command, 'DRAFTED');
+      expect(q.step(command, 'ACCEPTED')).toEqual({ ok: true, status: 'DRAFTED' });
+      expect(q.status(a).status).toBe('DRAFTED');
+      expect(() => q.step({ ...command, leaseToken: randomUUID() }, 'ACCEPTED')).toThrow('SEND_LEASE_MISMATCH');
     } finally {
       q.db.close();
     }

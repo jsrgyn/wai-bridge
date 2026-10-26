@@ -532,13 +532,13 @@ export class ExtensionSendRepository {
         // Retain lease owner on terminal records for authenticated, idempotent ACK retries.
         if (item.leaseOwner !== owner) throw new Error('SEND_LEASE_MISMATCH');
         if (input.step === 'ACCEPTED') {
-          // Delivery acknowledgement: durable, idempotent, never changes status.
-          if (item.status !== 'CLAIMED' || !item.leaseUntil || item.leaseUntil <= this.now())
+          // Delivery acknowledgement: durable, idempotent, never changes status. The
+          // same lease may already have progressed past CLAIMED (the tab executes before
+          // replying), so later states are an ok no-op rather than a conflict.
+          if (item.status === 'CLAIMED' && (!item.leaseUntil || item.leaseUntil <= this.now()))
             throw new Error('SEND_STATE_CONFLICT');
           const changed = this.db
-            .prepare(
-              "UPDATE wa_outbox SET accepted_at=? WHERE id=? AND status='CLAIMED' AND accepted_at IS NULL",
-            )
+            .prepare('UPDATE wa_outbox SET accepted_at=? WHERE id=? AND accepted_at IS NULL')
             .run(this.now(), item.id).changes;
           if (changed)
             new FlowLogRepository(this.db).record({
