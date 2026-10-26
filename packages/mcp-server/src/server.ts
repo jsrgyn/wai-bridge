@@ -317,7 +317,7 @@ export function createMcpServer({
   tool(
     server,
     'whatsapp_status',
-    'Get Local API, database, native connection, extension bridge readiness/build and queue counts. READY means a live monitored context; STALE or CONTENT_OUTDATED requires reconnection/reload. This does not confirm message delivery.',
+    'Get Local API, database, native connection, extension bridge readiness/build and queue counts. READY means a live monitored context; STALE or CONTENT_OUTDATED requires reconnection/reload. extension.compatible=false (or API_OUTDATED/CLIENT_OUTDATED) means the Local API and extension versions do not match; restart the Local API (scripts/restart-local-services.sh) and reload the extension. This does not confirm message delivery.',
     {},
     () => api.request('/api/status'),
     { readOnlyHint: true },

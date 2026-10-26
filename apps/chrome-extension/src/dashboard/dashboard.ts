@@ -75,6 +75,47 @@ function request(raw: unknown): Promise<unknown> {
   });
 }
 
+const API_OUTDATED_TEXT =
+  'API local desatualizada: reinicie o serviço (scripts/restart-local-services.sh)';
+const BRIDGE_REASON_LABELS: Record<string, string> = {
+  API_OUTDATED: 'API local desatualizada',
+  CLIENT_OUTDATED: 'Extensão desatualizada',
+};
+/** Send-queue management calls: a 404 means the running Local API predates these routes. */
+async function sendRequest(raw: unknown): Promise<unknown> {
+  const banner = element('api-outdated');
+  try {
+    const result = await request(raw);
+    banner.hidden = true;
+    banner.textContent = '';
+    return result;
+  } catch (error) {
+    if (error instanceof Error && error.message === 'NOT_FOUND') {
+      banner.hidden = false;
+      banner.textContent = API_OUTDATED_TEXT;
+    }
+    throw error;
+  }
+}
+const isOutdated = (error: unknown) => error instanceof Error && error.message === 'NOT_FOUND';
+function renderDiagnostics(raw: unknown) {
+  const wrapper = jsonObject.safeParse(raw);
+  const data = wrapper.success ? jsonObject.safeParse(wrapper.data.data) : undefined;
+  const runtime = data?.success ? jsonObject.safeParse(data.data.runtime) : undefined;
+  const api = runtime?.success ? runtime.data : {};
+  const extension = jsonObject.safeParse(api.extension);
+  const bridge = extension.success ? extension.data : {};
+  const text = (value: unknown, fallback = 'desconhecido') =>
+    typeof value === 'string' || typeof value === 'number' ? String(value) : fallback;
+  const reason = typeof bridge.bridge === 'string' ? bridge.bridge : undefined;
+  element('diagnostics').textContent = [
+    `Schema: ${text(api.schemaVersion)}`,
+    `Protocolo de envio da API: ${text(api.sendProtocolVersion)}`,
+    `Build da extensão: ${text(bridge.build)}`,
+    `Compatível: ${bridge.compatible === true ? 'sim' : bridge.compatible === false ? 'não' : 'desconhecido'}`,
+    ...(reason && BRIDGE_REASON_LABELS[reason] ? [BRIDGE_REASON_LABELS[reason]] : []),
+  ].join(' · ');
+}
 function action(work: () => Promise<void>) {
   return () => {
     status.dataset.error = 'false';
@@ -122,6 +163,7 @@ const jsonObject = z.record(z.string(), z.unknown());
 async function refresh() {
   const raw = await request({ operation: 'SUMMARY' });
   show(raw, 'summary');
+  renderDiagnostics(raw);
   const wrapper = jsonObject.parse(raw);
   const summary = jsonObject.parse(wrapper.data);
   const list = element('batches');
@@ -135,8 +177,10 @@ async function refresh() {
     list.append(button);
   }
   await maintenanceLoad();
-  await sendTimingLoad();
-  await sendQueueLoad();
+  for (const load of [sendTimingLoad, sendQueueLoad])
+    await load().catch((error: unknown) => {
+      if (!isOutdated(error)) throw error;
+    });
 }
 let contactsCursor: string | null = null,
   contactQuery: Record<string, string> = {};
@@ -381,7 +425,7 @@ function clearTimingErrors() {
     node.textContent = '';
 }
 async function sendTimingLoad() {
-  fillTiming(SendTimingSchema.parse(await request({ operation: 'SEND_SETTINGS_GET' })));
+  fillTiming(SendTimingSchema.parse(await sendRequest({ operation: 'SEND_SETTINGS_GET' })));
 }
 function collectTiming(form: HTMLFormElement) {
   clearTimingErrors();
@@ -415,11 +459,11 @@ element<HTMLInputElement>('send-timing')
     field(form, 'queueMaxWaitMin').disabled = (event.target as HTMLInputElement).checked;
   });
 submit('send-timing', async (form) => {
-  await request({ operation: 'SEND_SETTINGS_UPDATE', input: collectTiming(form) });
+  await sendRequest({ operation: 'SEND_SETTINGS_UPDATE', input: collectTiming(form) });
 });
 click('send-timing-reset', async () => {
   fillTiming(DEFAULT_SEND_TIMING);
-  await request({ operation: 'SEND_SETTINGS_UPDATE', input: DEFAULT_SEND_TIMING });
+  await sendRequest({ operation: 'SEND_SETTINGS_UPDATE', input: DEFAULT_SEND_TIMING });
 });
 const SEND_STATUS_LABELS: Record<string, string> = {
   QUEUED: 'Na fila',
@@ -444,7 +488,7 @@ const SEND_CANCELLABLE = new Set([
   'WAITING_AUTO_SEND',
 ]);
 async function sendQueueLoad() {
-  const queue = ExtensionSendQueueSchema.parse(await request({ operation: 'SEND_QUEUE' }));
+  const queue = ExtensionSendQueueSchema.parse(await sendRequest({ operation: 'SEND_QUEUE' }));
   const banner = element('send-paused');
   banner.hidden = !queue.paused;
   banner.textContent = queue.paused
@@ -471,7 +515,7 @@ async function sendQueueLoad() {
       cancel.addEventListener(
         'click',
         action(async () => {
-          await request({ operation: 'SEND_CANCEL', id: item.id });
+          await sendRequest({ operation: 'SEND_CANCEL', id: item.id });
           await sendQueueLoad();
         }),
       );

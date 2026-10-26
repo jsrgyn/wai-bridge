@@ -17,6 +17,7 @@ import {
 } from '@wai-bridge/database';
 import { EventRepository, EventService } from '@wai-bridge/events';
 import { OutboxCancellationService, OutboxService } from '@wai-bridge/outbox-engine';
+import { SEND_PROTOCOL_VERSION } from '@wai-bridge/shared';
 import type { CaptureObservation, SendTimingOverride } from '@wai-bridge/shared';
 import { badRequest, conflict, notFound } from '../errors.js';
 import type { PageQuery, MessageQuery } from '../types.js';
@@ -157,6 +158,7 @@ export class ApiService {
     return {
       status: 'ok',
       database: 'connected',
+      sendProtocolVersion: SEND_PROTOCOL_VERSION,
       extension: new ExtensionSendRepository(this.db).diagnostics(),
       schemaVersion: (
         this.db.prepare('SELECT MAX(version) version FROM wa_schema_migrations').get() as {

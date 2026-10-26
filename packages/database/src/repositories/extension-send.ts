@@ -310,8 +310,7 @@ export class ExtensionSendRepository {
     const sending = item.status === 'SENDING';
     const requeue = executing.includes(item.status);
     const next: OutboxStatus = sending ? 'UNKNOWN' : requeue ? 'QUEUED' : 'FAILED';
-    const reason =
-      requeue && code !== 'EXTENSION_NO_ACK' ? 'EXTENSION_INTERRUPTED_REQUEUED' : code;
+    const reason = requeue && code !== 'EXTENSION_NO_ACK' ? 'EXTENSION_INTERRUPTED_REQUEUED' : code;
     this.outbox.transition(item.id, item.status, next, 'extension-recovery', at, reason, {
       leaseOwner: null,
       leaseUntil: null,
@@ -714,17 +713,22 @@ export class ExtensionSendRepository {
         `SELECT status,COUNT(*) count FROM wa_outbox WHERE kind='extension-send' AND status NOT IN (${terminalSql}) GROUP BY status`,
       )
       .all() as { status: string; count: number }[];
+    const bridge = !row
+      ? 'UNSEEN'
+      : now - Date.parse(row.updated_at) > 15000
+        ? 'STALE'
+        : (cursor?.reason ?? 'LEGACY_CLIENT');
     return {
       native: !native
         ? 'UNSEEN'
         : now - Date.parse(native.last_seen_at) > 60000
           ? 'STALE'
           : native.status,
-      bridge: !row
-        ? 'UNSEEN'
-        : now - Date.parse(row.updated_at) > 15000
-          ? 'STALE'
-          : (cursor?.reason ?? 'LEGACY_CLIENT'),
+      bridge,
+      compatible:
+        bridge !== 'UNSEEN' &&
+        bridge !== 'STALE' &&
+        cursor?.protocolVersion === SEND_PROTOCOL_VERSION,
       lastPollAt: row?.updated_at ?? null,
       protocolVersion: cursor?.protocolVersion ?? null,
       build: cursor?.clientBuild ?? null,
