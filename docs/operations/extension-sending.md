@@ -252,3 +252,12 @@ PHONE_CHAT_UNAVAILABLE significa que o cabeçalho não confirmou a conversa sele
   tiver texto, falha com `DRAFT_PENDING_ON_TARGET` sem tocar no rascunho e sem
   clicar; se o campo estiver vazio, segue o fluxo normal e envia.
 - O campo de outra conversa nunca é alterado.
+
+## Compatibilidade de versões, aceite e reinício (ADR 0025)
+
+- **Passo obrigatório após atualizar:** rode `scripts/restart-local-services.sh`. Sem reiniciar, a Local API (launchd) segue no build e no schema antigos. `--check` apenas verifica (processo da API iniciado antes de `dist/main.js` ou schema atrás da última migration resulta em saída 1 com "reinício necessário").
+- **Protocolo de envio versão 3.** A extensão e o agente macOS informam `protocolVersion` no poll. A API só entrega comando a protocolo 3; versão diferente (ou ausente) recebe `command: null` com `reason: CLIENT_OUTDATED`, sem claim.
+- **Contrato inválido na ponta.** Se a resposta da API não satisfizer o contrato do comando (API antiga), o agente macOS não a descarta em silêncio: responde à extensão com `API_OUTDATED` e grava o flow log `NATIVE_HOST / FAILED / API_CONTRACT_MISMATCH`.
+- **ACCEPTED e `EXTENSION_NO_ACK`.** Ao receber o comando, a extensão reporta `ACCEPTED`, persistido pela API. `CLAIMED` sem `ACCEPTED` por 20 s (`SEND_ACCEPT_TIMEOUT_MS`) devolve o pedido a `QUEUED` com `EXTENSION_NO_ACK` e pausa a fila. Só vale antes de `SENDING`; não há duplicação.
+- **Onde `API_OUTDATED` aparece.** Hoje aparece nos logs da extensão e do agente macOS (flow logs) e como aviso no painel da extensão; não há campo no status do pedido porque a API antiga nunca chegou a gravar a causa. Se a extensão sequer recebe resposta válida, o pedido pode ficar `CLAIMED` até a API ser reiniciada. O pedido nunca avança para `SENDING` nesse caso.
+
