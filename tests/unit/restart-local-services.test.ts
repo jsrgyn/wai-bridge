@@ -201,3 +201,62 @@ echo "gui/501/x = {"; echo "	pid = $(cat "${pidFile}")"; echo "}"`,
     },
   );
 });
+
+describe('restart-local-services.sh schema read resilience', () => {
+  function flaky(failures: number, stderrMsg = 'database is locked') {
+    const s = setup({ schema: 18, latest: 18, pid: '4242', etime: '00:10', distAgeSeconds: 3600 });
+    const counter = join(dir, 'attempts');
+    const log = join(dir, 'calls.log');
+    writeFileSync(counter, '0');
+    stub('sleep', 'exit 0');
+    stub(
+      'sqlite3',
+      `n=$(cat "${counter}"); n=$((n+1)); echo $n > "${counter}"
+if [ "$n" -le ${failures} ]; then echo "${stderrMsg}" >&2; echo "second line" >&2; exit 1; fi
+exec /usr/bin/sqlite3 "$@"`,
+    );
+    stub('launchctl', `echo "$@" >> "${log}"; echo "x = {"; echo "	pid = 4242"; echo "}"`);
+    return { ...s, counter, log };
+  }
+
+  it('retries a locked read and reports the right version on the 3rd attempt', () => {
+    const { script, env, counter } = flaky(2);
+    const r = spawnSync('/bin/bash', [script, '--check'], { env, encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('schema na versão 18');
+    expect(readFileSync(counter, 'utf8').trim()).toBe('3');
+  });
+
+  it('does not retry on a wrong version', () => {
+    const s = setup({ schema: 16, latest: 18, pid: '4242', etime: '00:10', distAgeSeconds: 3600 });
+    const r = spawnSync('/bin/bash', [s.script, '--check'], { env: s.env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('16');
+  });
+
+  it('gives up within ~25s, shows the first stderr line and never restarts', () => {
+    const { script, env, log } = flaky(1000);
+    const t0 = Date.now();
+    const r = spawnSync('/bin/bash', [script, '--check'], { env, encoding: 'utf8' });
+    expect(Date.now() - t0).toBeLessThan(25000);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('não foi possível ler a versão do schema');
+    expect(r.stderr).toContain('database is locked');
+    expect(r.stderr).not.toContain('second line');
+    let calls = '';
+    try {
+      calls = readFileSync(log, 'utf8');
+    } catch {
+      /* no calls */
+    }
+    expect(calls).not.toContain('kickstart');
+  });
+
+  it('rejects a trailing comment argument and suggests pasting only the command', () => {
+    const { script, env } = setup({ schema: 18, latest: 18, pid: '1', distAgeSeconds: 10 });
+    const r = spawnSync('/bin/bash', [script, '--check', '#'], { env, encoding: 'utf8' });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('Uso:');
+    expect(r.stderr).toContain('somente o comando');
+  });
+});

@@ -161,7 +161,46 @@ async function setup(page: Page, outdated = false) {
       onMessage: { addListener: (listener: (value: unknown) => void) => listeners.push(listener) },
       onDisconnect: { addListener: () => {} },
     };
-    Object.assign(globalThis, { chrome: { runtime: { connect: () => port } } });
+    const scope = {
+      containerPresent: true,
+      visibleRowCount: 0,
+      listitemCount: 0,
+      rowCount: 4,
+      gridcellCount: 0,
+      headingCount: 0,
+      cellFrameTitleCount: 0,
+      ariaBusyCount: 1,
+      testIds: ['synthetic-row'],
+    };
+    const report = {
+      version: 1,
+      capturedAt: '2026-10-26T12:00:00.000Z',
+      searchInputPresent: true,
+      newChatButtonPresent: false,
+      scopes: { paneSide: scope, newChatDrawer: { ...scope, containerPresent: false } },
+    };
+    Object.assign(globalThis, {
+      chrome: {
+        runtime: {
+          connect: () => port,
+          sendMessage: async (raw: { kind: string }) => {
+            calls.push(raw);
+            return raw.kind === 'SEARCH_DIAGNOSE'
+              ? { ok: true, report: { ...report, scopes: { ...report.scopes, paneSide: { ...scope, visibleRowCount: 7 } } } }
+              : { ok: false };
+          },
+        },
+        storage: {
+          local: {
+            get: async () => ({
+              waiSearchDiagnostics: [
+                { code: 'PHONE_CONTACT_NOT_FOUND', recordedAt: '2026-10-26T12:00:01.000Z', report },
+              ],
+            }),
+          },
+        },
+      },
+    });
   }, outdated);
   await page.goto('https://dashboard.test/');
   await expect(page.locator('#status')).toHaveText('Operação concluída.');
@@ -321,4 +360,19 @@ test('shows schema, send protocol and build when API is current', async ({ page 
   await expect(page.locator('#diagnostics')).toContainText('Schema: 18');
   await expect(page.locator('#diagnostics')).toContainText('Protocolo de envio da API: 3');
   await expect(page.locator('#diagnostics')).toContainText('Compatível: sim');
+});
+
+test('shows stored search failure reports and runs a read-only structural diagnostic', async ({
+  page,
+}) => {
+  await setup(page);
+  const stored = page.locator('#search-diagnostics-list');
+  await expect(stored).toContainText('PHONE_CONTACT_NOT_FOUND');
+  await expect(stored).toContainText('"rowCount": 4');
+  await page.click('#search-diagnose');
+  await expect(page.locator('#search-diagnostics-result')).toContainText('"visibleRowCount": 7');
+  const calls = await page.evaluate(
+    () => (globalThis as unknown as { dashboardCalls: { kind?: string }[] }).dashboardCalls,
+  );
+  expect(calls.filter((call) => call.kind === 'SEARCH_DIAGNOSE')).toHaveLength(1);
 });

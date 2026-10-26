@@ -8,6 +8,7 @@ import {
   ExtensionSendProgressResultSchema,
   ExtensionSendProgressSchema,
   SEND_PROTOCOL_VERSION,
+  SEARCH_DIAGNOSTIC_CODES,
   type ConversationIdentity,
   type ExtensionSendCommand,
   type SendBridgeReasonSchema,
@@ -23,6 +24,7 @@ const ContextSchema = z.object({
 type Context = z.infer<typeof ContextSchema>;
 type Port = { postMessage(value: unknown): void };
 type Active = { tabId: number; command: ExtensionSendCommand; identity: ConversationIdentity };
+const searchDiagnosticCodes = new Set<string>(SEARCH_DIAGNOSTIC_CODES);
 const terminal = new Set(['SENT', 'FAILED', 'CANCELLED', 'UNKNOWN', 'DRAFTED']);
 function bounded<T>(operation: Promise<T>, ms = 1500): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -55,6 +57,7 @@ export class ExtensionSendBridge {
     private readonly storage: Pick<typeof chrome.storage.local, 'get'>,
     private readonly windows?: Pick<typeof chrome.windows, 'update'>,
     private readonly logs?: FlowLogSink,
+    private readonly diagnoseSearch?: (tabId: number, code: string) => Promise<void>,
   ) {}
   get busy(): boolean {
     return Boolean(this.active) || this.polling;
@@ -90,6 +93,11 @@ export class ExtensionSendBridge {
     if (!active || active.tabId !== tabId) throw new Error('SEND_NOT_ACTIVE');
     const result = ExtensionSendProgressResultSchema.parse(await this.rpc('SEND_PROGRESS', input));
     if (terminal.has(result.status)) this.complete(active);
+    // Structural diagnostic only; detached so it can never alter the send outcome.
+    if (input.step === 'FAILED' && searchDiagnosticCodes.has(input.code) && this.diagnoseSearch)
+      void Promise.resolve()
+        .then(() => this.diagnoseSearch!(tabId, input.code))
+        .catch(() => undefined);
     return result;
   }
   private complete(active: Active): void {

@@ -428,7 +428,7 @@ export class VisibleSendExecutor {
       traceId: command.traceId ?? command.id,
       resourceId: command.id,
       component: 'WHATSAPP_UI',
-      phase: result.step,
+      phase: result.step === 'ACCEPTED' ? 'SEND_ACCEPTED' : result.step,
       outcome:
         result.step === 'FAILED'
           ? 'FAILED'

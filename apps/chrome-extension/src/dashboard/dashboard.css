@@ -95,3 +95,7 @@ pre {
 .banner[hidden] {
   display: none;
 }
+.search-diagnostics pre {
+  max-height: 16rem;
+  overflow: auto;
+}
