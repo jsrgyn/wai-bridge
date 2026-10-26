@@ -4,6 +4,8 @@ declare const __WAI_BUILD_ID__: string;
 import { DialogueSyncBridge } from './dialogue-sync-bridge.js';
 import { FlowLogPublisher } from './flow-log-publisher.js';
 import { FlowLogSchema, emitFlow, flowCode, type FlowLogSink } from '@wai-bridge/shared';
+import type { SearchDiagnosticEntry } from '@wai-bridge/shared';
+import { recordSearchDiagnostic, requestSearchStructure } from './search-diagnostics.js';
 import { ExtensionSendBridge } from './send-bridge.js';
 import { ExtensionStateSchema, IdentityControlSchema, type ExtensionState } from '../contracts.js';
 import { z } from 'zod';
@@ -25,6 +27,18 @@ const sendBridge = new ExtensionSendBridge(
   chrome.storage.local,
   chrome.windows,
   flowSink,
+  async (tabId, code) => {
+    try {
+      await recordSearchDiagnostic(
+        chrome.tabs,
+        chrome.storage.local,
+        tabId,
+        code as SearchDiagnosticEntry['code'],
+      );
+    } catch {
+      console.warn('WAI_SEARCH_DIAGNOSTIC_UNAVAILABLE');
+    }
+  },
 );
 const syncBridge = new DialogueSyncBridge(getExtensionInstanceId, chrome.tabs, chrome.windows);
 let nativePort: chrome.runtime.Port | undefined;
@@ -270,6 +284,28 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
     return true;
   }
 
+  if (raw?.kind === 'SEARCH_DIAGNOSE') {
+    if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('dashboard.html')) {
+      respond({ ok: false, error: 'UNAUTHORIZED_SENDER' });
+      return;
+    }
+    void (async () => {
+      const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+      if (tabs.length !== 1 || tabs[0]!.id === undefined) throw new Error('NO_SINGLE_WHATSAPP_TAB');
+      return requestSearchStructure(chrome.tabs, tabs[0]!.id);
+    })()
+      .then((report) => respond({ ok: true, report }))
+      .catch((error) =>
+        respond({
+          ok: false,
+          error:
+            error instanceof Error && /^[A-Z_]{1,64}$/.test(error.message)
+              ? error.message
+              : 'SEARCH_DIAGNOSTIC_FAILED',
+        }),
+      );
+    return true;
+  }
   if (raw?.kind === 'FLOW_LOG') {
     const event = FlowLogSchema.safeParse(raw.event);
     if (

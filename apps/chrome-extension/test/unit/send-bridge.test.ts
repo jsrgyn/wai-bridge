@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ExtensionSendBridge } from '../../src/background/send-bridge.js';
 afterEach(() => vi.useRealTimers());
-function setup() {
+function setup(diagnose?: (tabId: number, code: string) => Promise<void>) {
   const extensionInstanceId = randomUUID();
   const identity = {
     version: 1 as const,
@@ -92,6 +92,8 @@ function setup() {
         state.ready = true;
       },
     } as unknown as Pick<typeof chrome.windows, 'update'>,
+    undefined,
+    diagnose,
   );
   bridge.connect({
     postMessage: (raw) => {
@@ -345,4 +347,48 @@ it('aborts local job when ACCEPTED is rejected', async () => {
   expect(state.executions).toBe(1);
   expect(command.id).toBeTruthy();
   bridge.disconnect();
+});
+
+for (const code of ['PHONE_CONTACT_NOT_FOUND', 'SEARCH_RESULTS_NOT_READY'])
+  it(`requests a structural search diagnostic after ${code} without changing the outcome`, async () => {
+    const calls: [number, string][] = [];
+    const { bridge, state, command, extensionInstanceId } = setup(async (tabId, failure) => {
+      calls.push([tabId, failure]);
+      throw new Error('diagnostic storage unavailable');
+    });
+    await bridge.poll();
+    const result = await bridge.progress(
+      {
+        extensionInstanceId,
+        commandId: command.id,
+        contextId: command.contextId,
+        leaseToken: command.leaseToken,
+        step: 'FAILED',
+        code,
+      },
+      5,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(result.status).toBe('FAILED');
+    expect(state.phase).toBe('FAILED');
+    expect(calls).toEqual([[5, code]]);
+  });
+it('does not request a search diagnostic for other failures', async () => {
+  const calls: unknown[] = [];
+  const { bridge, command, extensionInstanceId } = setup(async (...args) => {
+    calls.push(args);
+  });
+  await bridge.poll();
+  await bridge.progress(
+    {
+      extensionInstanceId,
+      commandId: command.id,
+      contextId: command.contextId,
+      leaseToken: command.leaseToken,
+      step: 'FAILED',
+      code: 'TARGET_MISMATCH',
+    },
+    5,
+  );
+  expect(calls).toEqual([]);
 });
